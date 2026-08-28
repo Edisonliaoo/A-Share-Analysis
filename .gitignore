@@ -1,0 +1,11 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.env
+*.csv
+download_financial_statement_files/
+company_info/
