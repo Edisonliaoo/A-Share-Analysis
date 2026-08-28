@@ -475,6 +475,22 @@ def fetch_all_data(code, exchange):
     except Exception:
         pass
 
+    # 获取分红历史
+    dividend_history = None
+    try:
+        dividend_history = get_dividend_history(code)
+    except Exception:
+        pass
+
+    # 获取风险指标
+    risk_metrics = None
+    try:
+        rf_for_risk = risk_free_rate if risk_free_rate else 2.0
+        risk_metrics = get_risk_metrics(code, exchange, years=3,
+                                         risk_free_rate=rf_for_risk)
+    except Exception:
+        pass
+
     return {
         'balance_sheet': bs,
         'income_statement': inc,
@@ -488,6 +504,8 @@ def fetch_all_data(code, exchange):
         'quarterly_prices': quarterly_prices,
         'beta': beta,
         'risk_free_rate': risk_free_rate,
+        'dividend_history': dividend_history,
+        'risk_metrics': risk_metrics,
     }
 
 
@@ -1077,3 +1095,255 @@ def load_local_company_info(prefix):
         df.columns = df.columns.str.strip()
         return df
     return None
+
+
+# ====== 股息分析数据 ======
+
+def get_dividend_history(code):
+    """
+    获取个股分红历史（来自东方财富datacenter API）
+    返回: list of dict, 每条含 report_year, dividend_per_share, dividend_yield, payout_ratio, etc.
+    """
+    secucode_map = {
+        'SH': f"{code}.SH",
+        'SZ': f"{code}.SZ",
+        'BJ': f"{code}.BJ",
+    }
+    if code.startswith('6') or code.startswith('9'):
+        secucode = f"{code}.SH"
+    elif code.startswith('0') or code.startswith('3') or code.startswith('2'):
+        secucode = f"{code}.SZ"
+    else:
+        secucode = f"{code}.BJ"
+
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://data.eastmoney.com',
+    })
+
+    all_records = []
+    page = 1
+    while True:
+        url = 'https://datacenter.eastmoney.com/securities/api/data/v1/get'
+        params = {
+            'reportName': 'RPT_F10_FIN_MAIN_GDHDMX',
+            'columns': 'ALL',
+            'filter': f'(SECUCODE="{secucode}")',
+            'pageNumber': page,
+            'pageSize': 100,
+            'sortColumns': 'REPORT_DATE',
+            'sortTypes': '-1',
+        }
+        try:
+            r = session.get(url, params=params, timeout=15)
+            data = r.json()
+            if not data.get('result') or not data['result'].get('data'):
+                break
+            page_data = data['result']['data']
+            all_records.extend(page_data)
+            if len(page_data) < 100:
+                break
+            page += 1
+        except Exception:
+            break
+
+    if not all_records:
+        return []
+
+    result = []
+    for rec in all_records:
+        report_date_str = rec.get('REPORT_DATE', '')
+        if not report_date_str:
+            continue
+        try:
+            report_date = pd.to_datetime(report_date_str)
+        except Exception:
+            continue
+
+        eps = rec.get('EPS')
+        dps = rec.get('DVPER_SHARE')
+        payout = rec.get('PRRR')
+        div_yield = rec.get('PSR')
+
+        result.append({
+            'report_date': report_date,
+            'report_year': str(report_date.year),
+            'dividend_per_share': float(dps) if dps is not None else None,
+            'eps': float(eps) if eps is not None else None,
+            'payout_ratio': float(payout) if payout is not None else None,
+            'dividend_yield': float(div_yield) if div_yield is not None else None,
+        })
+
+    result.sort(key=lambda x: x['report_date'])
+    return result
+
+
+# ====== 风险指标数据 ======
+
+def get_daily_prices(code, exchange, years=3):
+    """
+    获取日频收盘价（前复权）
+    返回: pd.Series, index=日期, values=收盘价
+    """
+    import akshare as ak
+    import os
+
+    saved = {}
+    for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+        if k in os.environ:
+            saved[k] = os.environ.pop(k)
+
+    try:
+        sina_code = _to_sina_code(code, exchange)
+        end_date = datetime.now().strftime('%Y%m%d')
+        start_year = datetime.now().year - years
+        start_date = f"{start_year}0101"
+
+        df = ak.stock_zh_a_daily(
+            symbol=sina_code,
+            start_date=start_date,
+            end_date=end_date,
+            adjust="qfq"
+        )
+
+        if df.empty:
+            return pd.Series(dtype=float)
+
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.set_index('date').sort_index()
+        return df['close']
+    except Exception:
+        return pd.Series(dtype=float)
+    finally:
+        os.environ.update(saved)
+
+
+def get_risk_metrics(code, exchange, years=3, risk_free_rate=2.0):
+    """
+    计算个股风险指标: Beta, 年化波动率, 最大回撤, Sharpe比率
+    返回: dict or None
+    """
+    import numpy as np
+    import akshare as ak
+    import os
+
+    saved = {}
+    for k in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+        if k in os.environ:
+            saved[k] = os.environ.pop(k)
+
+    try:
+        sina_code = _to_sina_code(code, exchange)
+        end_date = datetime.now().strftime('%Y%m%d')
+        start_year = datetime.now().year - years
+        start_date = f"{start_year}0101"
+
+        stock_df = ak.stock_zh_a_daily(
+            symbol=sina_code,
+            start_date=start_date,
+            end_date=end_date,
+            adjust="qfq"
+        )
+        if stock_df.empty:
+            return None
+
+        stock_df['date'] = pd.to_datetime(stock_df['date'])
+        stock_df = stock_df.set_index('date').sort_index()
+
+        index_df = ak.stock_zh_index_daily(symbol='sh000300')
+        if index_df is None or index_df.empty:
+            return None
+
+        index_df['date'] = pd.to_datetime(index_df['date'])
+        index_df = index_df.set_index('date').sort_index()
+
+        stock_returns = stock_df['close'].pct_change().dropna()
+        index_returns = index_df['close'].pct_change().dropna()
+
+        common_dates = stock_returns.index.intersection(index_returns.index)
+        beta = None
+        if len(common_dates) >= 30:
+            stock_r = stock_returns.loc[common_dates]
+            index_r = index_returns.loc[common_dates]
+            cov_matrix = np.cov(stock_r, index_r)
+            var_index = cov_matrix[1, 1]
+            if var_index > 0:
+                beta = float(cov_matrix[0, 1] / var_index)
+                if pd.isna(beta) or beta <= 0:
+                    beta = None
+
+        annualized_vol = float(stock_returns.std() * np.sqrt(252) * 100)
+
+        cumulative = (1 + stock_returns).cumprod()
+        running_max = cumulative.cummax()
+        drawdown = (cumulative - running_max) / running_max
+        max_drawdown = float(drawdown.min() * 100)
+
+        total_return = stock_df['close'].iloc[-1] / stock_df['close'].iloc[0] - 1
+        days = (stock_df.index[-1] - stock_df.index[0]).days
+        annual_return = float(((1 + total_return) ** (365.0 / days) - 1) * 100) if days > 0 else 0.0
+
+        rf = risk_free_rate / 100
+        sharpe = None
+        if annualized_vol > 0:
+            sharpe = float((annual_return / 100 - rf) / (annualized_vol / 100))
+
+        return {
+            'beta': beta,
+            'annualized_volatility': annualized_vol,
+            'max_drawdown': max_drawdown,
+            'sharpe_ratio': sharpe,
+            'annual_return': annual_return,
+        }
+    except Exception:
+        return None
+    finally:
+        os.environ.update(saved)
+
+
+# ====== 多股票对比数据 ======
+
+def get_stock_summary(code):
+    """
+    获取个股实时摘要指标（PE/PB/ROE/市值等）
+    使用东方财富push2 API
+    返回: dict or None
+    """
+    em_prefix = '1' if code.startswith('6') or code.startswith('9') else '0'
+    em_secid = f'{em_prefix}.{code}'
+
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://data.eastmoney.com',
+    })
+
+    url = 'https://push2.eastmoney.com/api/qt/stock/get'
+    params = {
+        'secid': em_secid,
+        'fields': 'f2,f3,f8,f9,f12,f14,f20,f21,f23,f115',
+    }
+
+    try:
+        r = session.get(url, params=params, timeout=10)
+        data = r.json().get('data', {})
+        if not data:
+            return None
+
+        return {
+            'code': code,
+            'name': data.get('f14', ''),
+            'price': float(data.get('f2', 0)) if data.get('f2') != '-' else 0,
+            'change_pct': float(data.get('f3', 0)) if data.get('f3') != '-' else 0,
+            'turnover_rate': float(data.get('f8', 0)) if data.get('f8') != '-' else 0,
+            'pe': float(data.get('f9', 0)) if data.get('f9') != '-' else 0,
+            'pb': float(data.get('f23', 0)) if data.get('f23') != '-' else 0,
+            'roe': float(data.get('f115', 0)) if data.get('f115') != '-' else 0,
+            'market_cap_yi': float(data.get('f20', 0)) / 1e8 if data.get('f20') else 0,
+            'circ_market_cap_yi': float(data.get('f21', 0)) / 1e8 if data.get('f21') else 0,
+        }
+    except Exception:
+        return None

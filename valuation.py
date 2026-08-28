@@ -178,14 +178,14 @@ def dcf_valuation(cash_flow, income_stmt, balance_sheet,
 
 def ddm_valuation(income_stmt, balance_sheet,
                   dividend_growth_rate=0.05, discount_rate=0.08,
-                  forecast_years=5, shares=None):
+                  forecast_years=5, shares=None,
+                  actual_payout_ratio=None, dividend_history=None):
     """
     DDM股利折现模型 (适用于分红稳定的公司)
+    参数:
+        actual_payout_ratio: 从现金流量表计算的实际派息率(0-1)
+        dividend_history: 分红历史数据列表, 含 dividend_per_share 字段
     """
-    # 尝试从现金流量表获取分红
-    # 这里用利润分配/分红支付来估算
-    # 如果没有分红数据，返回None
-    # 用归母净利润 * 假设分红率 估算
     np_col = '归属于母公司所有者的净利润' if '归属于母公司所有者的净利润' in income_stmt.columns else '净利润'
     net_profit = income_stmt.get(np_col)
     if net_profit is None or net_profit.empty:
@@ -195,8 +195,27 @@ def ddm_valuation(income_stmt, balance_sheet,
     if pd.isna(latest_profit) or latest_profit <= 0:
         return None
 
-    # 假设分红率30%（可调）
-    payout_ratio = 0.30
+    # 优先使用实际派息率，其次用分红历史推算，最后用默认30%
+    if actual_payout_ratio is not None and not actual_payout_ratio.empty:
+        recent_payout = actual_payout_ratio.tail(3).mean()
+        if pd.notna(recent_payout) and recent_payout > 0:
+            payout_ratio = min(max(recent_payout, 0.1), 0.9)
+        else:
+            payout_ratio = 0.30
+    elif dividend_history:
+        recent_divs = [d for d in dividend_history if d.get('dividend_per_share') and d['dividend_per_share'] > 0]
+        if recent_divs:
+            latest_div_data = recent_divs[-1]
+            hist_payout = latest_div_data.get('payout_ratio')
+            if hist_payout and hist_payout > 0:
+                payout_ratio = min(max(hist_payout, 0.1), 0.9)
+            else:
+                payout_ratio = 0.30
+        else:
+            payout_ratio = 0.30
+    else:
+        payout_ratio = 0.30
+
     latest_dividend = latest_profit * payout_ratio
 
     # Gordon增长模型

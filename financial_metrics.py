@@ -325,6 +325,54 @@ def build_financial_quality_table(income_stmt, balance_sheet, cash_flow):
     return result
 
 
+# ====== 股息分析指标 ======
+
+def calculate_actual_payout_ratio(cash_flow, income_stmt):
+    """
+    从现金流量表计算实际派息率
+    派息率 = 分配股利、利润或偿付利息支付的现金 / 归母净利润
+    返回: pd.Series (年度), 值为派息率(0-1)
+    """
+    div_paid = cash_flow.get('分配股利、利润或偿付利息支付的现金')
+    np_col = '归属于母公司所有者的净利润' if '归属于母公司所有者的净利润' in income_stmt.columns else '净利润'
+    net_profit = income_stmt.get(np_col)
+
+    if div_paid is None or net_profit is None:
+        return pd.Series(dtype=float)
+
+    annual_div = div_paid[div_paid.index.month == 12]
+    annual_np = net_profit[net_profit.index.month == 12]
+
+    payout = annual_div.reindex(annual_np.index).div(annual_np.replace(0, np.nan))
+    payout = payout.clip(0, 2)
+    return payout.dropna()
+
+
+def build_dividend_table(dividend_history, cash_flow=None, income_stmt=None):
+    """
+    构建分红历史展示表
+    返回: pd.DataFrame, index=年度
+    """
+    if not dividend_history:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(dividend_history)
+    df = df.set_index('report_year')
+
+    display = pd.DataFrame(index=df.index)
+    if 'dividend_per_share' in df.columns:
+        display['每股股息(元)'] = df['dividend_per_share']
+    if 'eps' in df.columns:
+        display['每股收益(元)'] = df['eps']
+    if 'payout_ratio' in df.columns:
+        display['派息率(%)'] = df['payout_ratio'] * 100
+    if 'dividend_yield' in df.columns:
+        display['股息率(%)'] = df['dividend_yield'] * 100
+
+    display.index.name = '年度'
+    return display
+
+
 def build_income_table(income_stmt, annual_only=True):
     """
     构建利润表展示表（只含用户关心的指标）

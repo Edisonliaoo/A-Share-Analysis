@@ -1382,3 +1382,226 @@ def plot_quarterly_growth(income_stmt):
         height=400,
     )
     return fig
+
+
+# ====== 股息分析图表 ======
+
+def plot_dividend_trend(dividend_history, price=None):
+    """
+    分红历史趋势图: 每股股息(柱) + 派息率(线) + 股息率(线)
+    """
+    if not dividend_history:
+        return None
+
+    df = pd.DataFrame(dividend_history)
+    if 'dividend_per_share' not in df.columns:
+        return None
+
+    df = df.dropna(subset=['dividend_per_share'])
+    df = df[df['dividend_per_share'] > 0]
+    if df.empty:
+        return None
+
+    years = df['report_year'].tolist()
+    dps = df['dividend_per_share'].tolist()
+    payout = df['payout_ratio'].fillna(0).tolist() if 'payout_ratio' in df.columns else [0] * len(years)
+    div_yield = df['dividend_yield'].fillna(0).tolist() if 'dividend_yield' in df.columns else [0] * len(years)
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(go.Bar(
+        x=years, y=dps, name='每股股息(元)',
+        marker_color=C_RED, opacity=0.85,
+        text=[f"{v:.3f}" for v in dps],
+        textposition='outside',
+    ), secondary_y=False)
+
+    if any(p > 0 for p in payout):
+        fig.add_trace(go.Scatter(
+            x=years, y=[p * 100 for p in payout],
+            name='派息率(%)', line=dict(color=C_BLUE, width=2),
+            mode='lines+markers',
+        ), secondary_y=True)
+
+    if any(d > 0 for d in div_yield):
+        fig.add_trace(go.Scatter(
+            x=years, y=[d * 100 for d in div_yield],
+            name='股息率(%)', line=dict(color=C_GREEN, width=2, dash='dot'),
+            mode='lines+markers',
+        ), secondary_y=True)
+
+    fig.update_xaxes(title_text="年度", tickangle=-45)
+    fig.update_yaxes(title_text="每股股息 (元)", secondary_y=False)
+    fig.update_yaxes(title_text="比率 (%)", secondary_y=True)
+    fig.update_layout(
+        title="分红历史趋势",
+        hovermode='x unified',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=400,
+    )
+    return fig
+
+
+# ====== 风险指标图表 ======
+
+def plot_risk_metrics(risk_metrics, stock_name=""):
+    """
+    风险指标可视化: 年化波动率、最大回撤、年化收益率、Sharpe比率
+    """
+    if not risk_metrics:
+        return None
+
+    metrics = ['年化收益率', '年化波动率', '最大回撤', 'Sharpe比率']
+    values = [
+        risk_metrics.get('annual_return', 0),
+        risk_metrics.get('annualized_volatility', 0),
+        risk_metrics.get('max_drawdown', 0),
+        risk_metrics.get('sharpe_ratio', 0) or 0,
+    ]
+    colors = [C_GREEN, C_ORANGE, C_RED, C_BLUE]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=metrics, y=values,
+        marker_color=colors,
+        text=[f"{v:.2f}%" if i < 3 else f"{v:.2f}" for i, v in enumerate(values)],
+        textposition='outside',
+    ))
+
+    title = "风险指标汇总 (近3年)"
+    if stock_name:
+        title += f" | {stock_name}"
+
+    fig.update_layout(
+        title=title,
+        yaxis_title="数值",
+        height=400,
+        showlegend=False,
+        margin=dict(l=60, r=60, t=60, b=60),
+    )
+    return fig
+
+
+# ====== 多股票对比图表 ======
+
+def plot_radar_chart(stock_summaries, current_code=None):
+    """
+    多股票雷达对比图
+    维度: 估值吸引力(1/PE), 盈利能力(ROE), 成长性(涨跌幅), 安全性(1/PB), 流动性(换手率), 规模(市值)
+    """
+    if not stock_summaries or len(stock_summaries) < 2:
+        return None
+
+    categories = ['估值', '盈利', '动量', '安全', '流动', '规模']
+
+    raw_data = []
+    names = []
+    for s in stock_summaries:
+        if s is None:
+            continue
+        names.append(s.get('name', s.get('code', '')))
+        raw_data.append({
+            'pe': s.get('pe', 0),
+            'roe': s.get('roe', 0),
+            'change_pct': s.get('change_pct', 0),
+            'pb': s.get('pb', 0),
+            'turnover_rate': s.get('turnover_rate', 0),
+            'market_cap_yi': s.get('market_cap_yi', 0),
+        })
+
+    if len(raw_data) < 2:
+        return None
+
+    # 归一化到0-1
+    def normalize(values, higher_is_better=True):
+        vals = [v if v > 0 else 0 for v in values]
+        if not vals or max(vals) == 0:
+            return [0.5] * len(vals)
+        lo, hi = min(vals), max(vals)
+        if hi == lo:
+            return [0.5] * len(vals)
+        norm = [(v - lo) / (hi - lo) for v in vals]
+        if not higher_is_better:
+            norm = [1 - n for n in norm]
+        return norm
+
+    fig = go.Figure()
+
+    radar_colors = [C_BLUE, C_RED, C_GREEN, C_PURPLE, C_ORANGE]
+
+    for idx, (name, data) in enumerate(zip(names, raw_data)):
+        normalized = [
+            normalize([d['pe'] for d in raw_data], higher_is_better=False)[idx],
+            normalize([d['roe'] for d in raw_data])[idx],
+            normalize([d['change_pct'] for d in raw_data])[idx],
+            normalize([d['pb'] for d in raw_data], higher_is_better=False)[idx],
+            normalize([d['turnover_rate'] for d in raw_data])[idx],
+            normalize([d['market_cap_yi'] for d in raw_data])[idx],
+        ]
+
+        # 平滑处理，避免0值
+        normalized = [max(n, 0.05) for n in normalized]
+
+        color = radar_colors[idx % len(radar_colors)]
+        fig.add_trace(go.Scatterpolar(
+            r=normalized + [normalized[0]],
+            theta=categories + [categories[0]],
+            fill='toself',
+            name=name,
+            line=dict(color=color, width=2),
+            fillcolor=color,
+            opacity=0.15,
+        ))
+
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(visible=True, range=[0, 1]),
+        ),
+        title="多股票雷达对比 (归一化)",
+        height=500,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    )
+    return fig
+
+
+def plot_stock_comparison_bars(stock_summaries, metric='pe', current_code=None):
+    """
+    多股票对比柱状图
+    """
+    if not stock_summaries:
+        return None
+
+    labels_map = {
+        'pe': '市盈率(P/E)',
+        'pb': '市净率(P/B)',
+        'roe': 'ROE(%)',
+        'market_cap_yi': '总市值(亿)',
+        'turnover_rate': '换手率(%)',
+    }
+    label = labels_map.get(metric, metric)
+
+    valid = [s for s in stock_summaries if s and s.get(metric, 0) > 0]
+    if len(valid) < 2:
+        return None
+
+    names = [s['name'] for s in valid]
+    values = [s[metric] for s in valid]
+
+    colors = [C_RED if s.get('code') == current_code else C_BLUE for s in valid]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=names, y=values,
+        marker_color=colors,
+        text=[f"{v:.2f}" for v in values],
+        textposition='outside',
+    ))
+
+    fig.update_layout(
+        title=f"多股票对比 - {label}",
+        xaxis_title="", yaxis_title=label,
+        height=400,
+        showlegend=False,
+        margin=dict(l=60, r=60, t=60, b=60),
+    )
+    return fig

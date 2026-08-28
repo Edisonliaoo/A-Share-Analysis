@@ -15,6 +15,7 @@ from data_fetcher import (
     search_stocks, fetch_all_data, get_company_info, get_csi300_pe_data,
     get_industry_board_name, get_industry_peers,
     get_industry_index_data, compute_industry_pe_history,
+    get_stock_summary,
 )
 from financial_metrics import (
     calculate_gross_margin, calculate_expense_ratio, calculate_roe,
@@ -24,6 +25,7 @@ from financial_metrics import (
     calculate_cashflow_to_profit_ratio, calculate_goodwill_ratio,
     calculate_receivable_turnover_days, calculate_inventory_turnover_days,
     calculate_rd_ratio, build_financial_quality_table,
+    calculate_actual_payout_ratio, build_dividend_table,
 )
 from valuation import dcf_valuation, ddm_valuation, pb_valuation, pe_valuation, calculate_wacc
 from visualizations import (
@@ -38,6 +40,8 @@ from visualizations import (
     plot_industry_peer_bars, plot_industry_marketcap_trend,
     plot_debt_ratio_trend, plot_financial_quality_card,
     plot_growth_analysis, plot_rd_ratio_trend, plot_quarterly_growth,
+    plot_dividend_trend, plot_risk_metrics,
+    plot_radar_chart, plot_stock_comparison_bars,
 )
 
 # ========== 页面配置 ==========
@@ -50,6 +54,10 @@ st.set_page_config(
 
 st.title("📊 A股投资分析系统")
 st.markdown("---")
+
+# 初始化自选股列表
+if 'watchlist' not in st.session_state:
+    st.session_state['watchlist'] = []
 
 # ========== 侧边栏：股票搜索 ==========
 st.sidebar.header("🔍 股票搜索")
@@ -96,6 +104,22 @@ if selected_stock:
         st.session_state['data_loaded'] = True
         st.rerun()
 
+# 显示自选股列表
+if st.session_state.get('watchlist'):
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("⭐ 自选股")
+    for i, item in enumerate(st.session_state['watchlist']):
+        col_w1, col_w2 = st.sidebar.columns([4, 1])
+        with col_w1:
+            st.sidebar.text(f"{item['name']} ({item['exchange']}{item['code']})")
+        with col_w2:
+            if st.button("✕", key=f"remove_{i}", help="移除"):
+                st.session_state['watchlist'].pop(i)
+                st.rerun()
+    if st.sidebar.button("🗑️ 清空自选股"):
+        st.session_state['watchlist'] = []
+        st.rerun()
+
 
 # ========== 数据加载 ==========
 if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
@@ -125,6 +149,8 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
     quarterly_prices = data.get('quarterly_prices')
     beta = data.get('beta')
     risk_free_rate = data.get('risk_free_rate')
+    dividend_history = data.get('dividend_history')
+    risk_metrics = data.get('risk_metrics')
 
     if balance_sheet is None or balance_sheet.empty:
         st.error("未能获取到财务数据，请检查股票代码或稍后重试")
@@ -156,6 +182,20 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                     val = val[:30] + "..."
                 st.sidebar.text(f"{chn_label}: {val}")
 
+    # 加入自选股
+    st.sidebar.markdown("---")
+    stock_item = {
+        'code': stock['code'],
+        'name': stock['name'],
+        'exchange': stock['exchange'],
+    }
+    if stock_item not in st.session_state['watchlist']:
+        if st.sidebar.button("⭐ 加入自选股"):
+            st.session_state['watchlist'].append(stock_item)
+            st.rerun()
+    else:
+        st.sidebar.success("✅ 已在自选股列表中")
+
     # ========== 加载行业对标数据 ==========
     industry_name_raw = company_info.get('EM2016', '') if company_info else ''
 
@@ -182,7 +222,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             industry_data = load_industry_data(industry_name_raw)
 
     # ========== 主内容区 ==========
-    tab1, tab2, tab3 = st.tabs(["🏢 公司财务分析", "💰 公司估值分析", "🏭 行业对标"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🏢 公司财务分析", "💰 公司估值分析", "🏭 行业对标", "📊 多股对比"])
 
     # ==================== Tab 1: 公司财务分析 ====================
     with tab1:
@@ -812,10 +852,16 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
 
         # --- DDM 估值 ---
         st.subheader("📈 DDM 股利折现模型")
+
+        # 计算实际派息率
+        actual_payout = calculate_actual_payout_ratio(cash_flow, income_stmt)
+
         ddm_result = ddm_valuation(
             annual_inc, annual_bs,
             dividend_growth_rate=ddm_growth, discount_rate=ddm_discount,
             shares=market_cap['shares'] if market_cap else None,
+            actual_payout_ratio=actual_payout,
+            dividend_history=dividend_history,
         )
         if ddm_result:
             col_dd1, col_dd2 = st.columns(2)
@@ -840,6 +886,102 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                 st.write(f"**最新年度预测分红**: {ddm_result['latest_dividend'] / 1e8:.2f} 亿元")
         else:
             st.warning("该公司净利润为负或不适用DDM模型，建议参考DCF估值")
+
+        st.markdown("---")
+
+        # ======== 股息分析 ========
+        st.header("📊 股息分析")
+        st.caption("实际分红历史、股息率与派息率趋势")
+
+        if dividend_history:
+            # 分红趋势图
+            fig_div = plot_dividend_trend(dividend_history, market_cap['price'] if market_cap else None)
+            if fig_div:
+                st.plotly_chart(fig_div, use_container_width=True)
+
+            # 分红明细表
+            div_table = build_dividend_table(dividend_history)
+            if not div_table.empty:
+                st.markdown("**分红历史明细**")
+                st.dataframe(
+                    div_table.style.format("{:.4f}"),
+                    use_container_width=True,
+                )
+
+            # 实际派息率 vs DDM假设对比
+            if actual_payout is not None and not actual_payout.empty:
+                st.markdown("**实际派息率趋势**")
+                st.caption(f"近3年平均派息率: {actual_payout.tail(3).mean()*100:.1f}%  |  DDM使用派息率: {ddm_result['payout_ratio']*100:.0f}%" if ddm_result else "")
+                st.dataframe(
+                    pd.DataFrame({
+                        '年度': [str(d.year) for d in actual_payout.index],
+                        '派息率(%)': actual_payout.values * 100,
+                    }).set_index('年度').style.format("{:.1f}"),
+                    use_container_width=True,
+                )
+        else:
+            st.info("暂无分红历史数据")
+
+        st.markdown("---")
+
+        # ======== 风险指标 ========
+        st.header("📊 风险指标分析")
+        st.caption("Beta、年化波动率、最大回撤、Sharpe比率 (基于近3年日频数据)")
+
+        if risk_metrics:
+            col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+            with col_r1:
+                beta_val = risk_metrics.get('beta')
+                st.metric("Beta (β)", f"{beta_val:.2f}" if beta_val else "N/A")
+            with col_r2:
+                st.metric("年化波动率", f"{risk_metrics.get('annualized_volatility', 0):.2f}%")
+            with col_r3:
+                st.metric("最大回撤", f"{risk_metrics.get('max_drawdown', 0):.2f}%")
+            with col_r4:
+                sharpe = risk_metrics.get('sharpe_ratio')
+                st.metric("Sharpe比率", f"{sharpe:.2f}" if sharpe is not None else "N/A")
+
+            # 风险指标图表
+            fig_risk = plot_risk_metrics(risk_metrics, stock['name'])
+            if fig_risk:
+                st.plotly_chart(fig_risk, use_container_width=True)
+
+            # 风险等级解读
+            vol = risk_metrics.get('annualized_volatility', 0)
+            mdd = risk_metrics.get('max_drawdown', 0)
+            sharpe_val = risk_metrics.get('sharpe_ratio')
+            st.markdown("**风险解读：**")
+            risk_interpretations = []
+            if beta_val:
+                if beta_val < 0.8:
+                    risk_interpretations.append(f"✅ Beta {beta_val:.2f}，波动低于大盘，防守型")
+                elif beta_val < 1.2:
+                    risk_interpretations.append(f"⚠️ Beta {beta_val:.2f}，与大盘波动基本一致")
+                else:
+                    risk_interpretations.append(f"🔴 Beta {beta_val:.2f}，波动高于大盘，进攻型")
+            if vol < 20:
+                risk_interpretations.append(f"✅ 年化波动率 {vol:.1f}%，低波动")
+            elif vol < 40:
+                risk_interpretations.append(f"⚠️ 年化波动率 {vol:.1f}%，中等波动")
+            else:
+                risk_interpretations.append(f"🔴 年化波动率 {vol:.1f}%，高波动")
+            if mdd > -40:
+                risk_interpretations.append(f"✅ 最大回撤 {mdd:.1f}%，回撤可控")
+            elif mdd > -60:
+                risk_interpretations.append(f"⚠️ 最大回撤 {mdd:.1f}%，回撤较大")
+            else:
+                risk_interpretations.append(f"🔴 最大回撤 {mdd:.1f}%，回撤严重")
+            if sharpe_val is not None:
+                if sharpe_val > 1:
+                    risk_interpretations.append(f"✅ Sharpe {sharpe_val:.2f}，风险调整后收益优秀")
+                elif sharpe_val > 0:
+                    risk_interpretations.append(f"⚠️ Sharpe {sharpe_val:.2f}，收益略高于无风险利率")
+                else:
+                    risk_interpretations.append(f"🔴 Sharpe {sharpe_val:.2f}，跑输无风险利率")
+            for interp in risk_interpretations:
+                st.markdown(f"- {interp}")
+        else:
+            st.info("暂无足够数据计算风险指标")
 
         st.markdown("---")
         st.caption("⚠️ 免责声明: 本工具仅用于学习和研究目的，所有估值结果仅供参考，不构成投资建议。")
@@ -1054,6 +1196,85 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.warning("当前个股不在同业板块成分股列表中，无法计算排名")
 
         st.caption("⚠️ 数据来源: 东方财富行业板块。P/E趋势为基于指数价格的近似推算，仅供参考。")
+
+    # ==================== Tab 4: 多股对比 ====================
+    with tab4:
+        st.header("📊 多股对比分析")
+        st.caption("将自选股加入列表后，横向对比关键指标")
+
+        watchlist = st.session_state.get('watchlist', [])
+
+        if not watchlist:
+            st.info("👈 请先将股票加入自选股列表（在侧边栏点击「⭐ 加入自选股」）")
+        else:
+            # 获取所有自选股的实时摘要
+            @st.cache_data(ttl=300, show_spinner=False)
+            def fetch_watchlist_summaries(codes_tuple):
+                summaries = []
+                for code in codes_tuple:
+                    s = get_stock_summary(code)
+                    if s:
+                        summaries.append(s)
+                return summaries
+
+            codes_tuple = tuple(item['code'] for item in watchlist)
+            with st.spinner("正在获取自选股实时数据..."):
+                summaries = fetch_watchlist_summaries(codes_tuple)
+
+            if not summaries:
+                st.warning("无法获取自选股数据")
+            else:
+                # 对比表
+                st.subheader("横向对比表")
+                comp_df = pd.DataFrame(summaries)
+                display_cols = ['name', 'price', 'change_pct', 'pe', 'pb', 'roe',
+                               'market_cap_yi', 'circ_market_cap_yi', 'turnover_rate']
+                display_names = {
+                    'name': '名称', 'price': '最新价', 'change_pct': '涨跌幅(%)',
+                    'pe': 'PE(动态)', 'pb': 'PB', 'roe': 'ROE(%)',
+                    'market_cap_yi': '总市值(亿)', 'circ_market_cap_yi': '流通市值(亿)',
+                    'turnover_rate': '换手率(%)',
+                }
+                comp_display = comp_df[display_cols].rename(columns=display_names)
+                st.dataframe(
+                    comp_display.style.format({
+                        '最新价': '{:.2f}',
+                        '涨跌幅(%)': '{:.2f}',
+                        'PE(动态)': '{:.1f}',
+                        'PB': '{:.2f}',
+                        'ROE(%)': '{:.2f}',
+                        '总市值(亿)': '{:.1f}',
+                        '流通市值(亿)': '{:.1f}',
+                        '换手率(%)': '{:.2f}',
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                # 雷达图
+                if len(summaries) >= 2:
+                    st.subheader("雷达对比图")
+                    fig_radar = plot_radar_chart(summaries, stock['code'])
+                    if fig_radar:
+                        st.plotly_chart(fig_radar, use_container_width=True)
+                    else:
+                        st.info("数据不足，无法生成雷达图")
+
+                # 分项对比柱状图
+                st.subheader("分项对比")
+                metric_options = ['pe', 'pb', 'roe', 'market_cap_yi', 'turnover_rate']
+                metric_labels = {
+                    'pe': '市盈率(P/E)', 'pb': '市净率(P/B)', 'roe': 'ROE(%)',
+                    'market_cap_yi': '总市值(亿)', 'turnover_rate': '换手率(%)',
+                }
+                selected_metric = st.selectbox(
+                    "选择对比指标",
+                    metric_options,
+                    format_func=lambda x: metric_labels.get(x, x),
+                )
+                fig_comp = plot_stock_comparison_bars(summaries, selected_metric, stock['code'])
+                if fig_comp:
+                    st.plotly_chart(fig_comp, use_container_width=True)
 
 else:
     st.info("👈 请在左侧搜索并选择一只股票，然后点击「加载数据」开始分析")
