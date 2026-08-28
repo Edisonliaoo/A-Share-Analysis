@@ -48,6 +48,7 @@ CASHFLOW_COLS = [
     '投资活动产生的现金流量净额',
     '筹资活动产生的现金流量净额',
     '购建固定资产、无形资产和其他长期资产所支付的现金',
+    '分配股利、利润或偿付利息支付的现金',
 ]
 
 # ====== 资产负债表所有需要的列 ======
@@ -60,6 +61,7 @@ BS_ALL_COLS = [
     '长期借款', '应付债券', '其他非流动负债',
     '资产总计', '负债合计', '归属于母公司股东权益合计',
     '实收资本(或股本)',
+    '流动资产合计', '流动负债合计',
 ]
 
 
@@ -769,7 +771,7 @@ def get_industry_peers(industry_name):
         'po': 1, 'np': 1,
         'fltt': 2, 'invt': 2,
         'fs': f'b:{board_code}',
-        'fields': 'f2,f3,f8,f9,f12,f14,f20,f21,f23',
+        'fields': 'f2,f3,f8,f9,f12,f14,f20,f21,f23,f115',
     }
     try:
         r = session.get(url, params=params, timeout=15)
@@ -788,6 +790,7 @@ def get_industry_peers(industry_name):
         result['turnover_rate'] = pd.to_numeric(df.get('f8', 0), errors='coerce')
         result['pe'] = pd.to_numeric(df.get('f9', 0), errors='coerce')
         result['pb'] = pd.to_numeric(df.get('f23', 0), errors='coerce')
+        result['roe'] = pd.to_numeric(df.get('f115', 0), errors='coerce')
         result['market_cap_yi'] = pd.to_numeric(df.get('f20', 0), errors='coerce') / 1e8
         result['circ_market_cap_yi'] = pd.to_numeric(df.get('f21', 0), errors='coerce') / 1e8
 

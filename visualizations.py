@@ -999,7 +999,8 @@ def plot_industry_pe_distribution(peers_df, stock_code, stock_name, metric='pe')
     if valid.empty:
         return None
 
-    label = '市盈率(P/E)' if metric == 'pe' else '市净率(P/B)'
+    labels_map = {'pe': '市盈率(P/E)', 'pb': '市净率(P/B)', 'roe': 'ROE(%)'}
+    label = labels_map.get(metric, metric)
 
     stock_row = valid[valid['code'] == stock_code]
     stock_val = float(stock_row[metric].values[0]) if not stock_row.empty else None
@@ -1053,7 +1054,8 @@ def plot_industry_peer_bars(peers_df, stock_code, stock_name, metric='pe', top_n
     if valid.empty:
         return None
 
-    label = '市盈率(P/E)' if metric == 'pe' else '市净率(P/B)'
+    labels = {'pe': '市盈率(P/E)', 'pb': '市净率(P/B)', 'roe': 'ROE(%)'}
+    label = labels.get(metric, metric)
 
     top = valid.nlargest(top_n, 'market_cap_yi').sort_values(metric, ascending=True)
 
@@ -1118,4 +1120,265 @@ def plot_industry_marketcap_trend(index_data, industry_name):
         margin=dict(l=60, r=60, t=60, b=60),
     )
 
+    return fig
+
+
+# ====== 财务质量深度指标图表 ======
+
+def plot_debt_ratio_trend(balance_sheet):
+    """资产负债率趋势图"""
+    annual = balance_sheet[balance_sheet.index.month == 12]
+    total_liab = annual.get('负债合计')
+    total_assets = annual.get('资产总计')
+    if total_liab is None or total_assets is None:
+        return None
+    ratio = total_liab.div(total_assets.replace(0, np.nan)) * 100
+    ratio = ratio.dropna()
+    if ratio.empty:
+        return None
+
+    years = [str(d.year) for d in ratio.index]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=years, y=ratio.values, name='资产负债率',
+        marker_color=C_RED,
+        text=[f"{v:.1f}%" for v in ratio.values],
+        textposition='outside',
+    ))
+    fig.add_hline(y=60, line_dash="dash", line_color=C_ORANGE,
+                  annotation_text="警戒线 60%")
+    fig.add_hline(y=40, line_dash="dash", line_color=C_GREEN,
+                  annotation_text="稳健线 40%")
+    fig.update_layout(
+        title="资产负债率趋势 (年度)",
+        xaxis_title="年度", yaxis_title="资产负债率 (%)",
+        height=350,
+    )
+    return fig
+
+
+def plot_financial_quality_card(income_stmt, balance_sheet, cash_flow):
+    """财务质量综合仪表板: 4个子图"""
+    annual_inc = income_stmt[income_stmt.index.month == 12]
+    annual_bs = balance_sheet[balance_sheet.index.month == 12]
+    annual_cf = cash_flow[cash_flow.index.month == 12]
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=('资产负债率(%)', '流动比率 & 速动比率',
+                        '应收账款 & 存货周转天数', '现金流/净利润比'),
+        vertical_spacing=0.15, horizontal_spacing=0.1,
+    )
+
+    # 1. 资产负债率
+    total_liab = annual_bs.get('负债合计')
+    total_assets = annual_bs.get('资产总计')
+    if total_liab is not None and total_assets is not None:
+        debt_ratio = total_liab.div(total_assets.replace(0, np.nan)) * 100
+        debt_ratio = debt_ratio.dropna()
+        if not debt_ratio.empty:
+            years = [str(d.year) for d in debt_ratio.index]
+            fig.add_trace(go.Bar(x=years, y=debt_ratio.values, name='资产负债率',
+                                marker_color=C_RED, showlegend=False), row=1, col=1)
+
+    # 2. 流动比率 & 速动比率
+    ca = annual_bs.get('流动资产合计')
+    cl = annual_bs.get('流动负债合计')
+    inv = annual_bs.get('存货')
+    if ca is not None and cl is not None:
+        current_r = ca.div(cl.replace(0, np.nan))
+        inv_val = inv if inv is not None else 0
+        quick_r = (ca - inv_val).div(cl.replace(0, np.nan))
+        common_idx = current_r.dropna().index.intersection(quick_r.dropna().index)
+        if not common_idx.empty:
+            years = [str(d.year) for d in common_idx]
+            fig.add_trace(go.Scatter(x=years, y=current_r.loc[common_idx].values,
+                                     name='流动比率', line=dict(color=C_BLUE, width=2),
+                                     mode='lines+markers'), row=1, col=2)
+            fig.add_trace(go.Scatter(x=years, y=quick_r.loc[common_idx].values,
+                                     name='速动比率', line=dict(color=C_GREEN, width=2),
+                                     mode='lines+markers'), row=1, col=2)
+
+    # 3. 周转天数
+    rev = annual_inc.get('营业总收入', annual_inc.get('营业收入'))
+    ar = annual_bs.get('应收票据及应收账款')
+    cost = annual_inc.get('营业总成本', annual_inc.get('营业成本'))
+    if rev is not None and ar is not None and len(ar) >= 2:
+        avg_ar = (ar + ar.shift(1)) / 2
+        ar_turnover = 365 / (rev.reindex(avg_ar.index).div(avg_ar.replace(0, np.nan)))
+        ar_turnover = ar_turnover.dropna()
+        if not ar_turnover.empty:
+            years = [str(d.year) for d in ar_turnover.index]
+            fig.add_trace(go.Bar(x=years, y=ar_turnover.values, name='应收账款周转天数',
+                                 marker_color=C_BLUE, showlegend=False), row=2, col=1)
+    if cost is not None and inv is not None and len(inv) >= 2:
+        avg_inv = (inv + inv.shift(1)) / 2
+        inv_turnover = 365 / (cost.reindex(avg_inv.index).div(avg_inv.replace(0, np.nan)))
+        inv_turnover = inv_turnover.dropna()
+        if not inv_turnover.empty:
+            years = [str(d.year) for d in inv_turnover.index]
+            fig.add_trace(go.Bar(x=years, y=inv_turnover.values, name='存货周转天数',
+                                 marker_color=C_ORANGE, showlegend=False), row=2, col=1)
+
+    # 4. 现金流/净利润
+    ocf = annual_cf.get('经营活动产生的现金流量净额')
+    np_col = '归属于母公司所有者的净利润' if '归属于母公司所有者的净利润' in annual_inc.columns else '净利润'
+    net_profit = annual_inc.get(np_col)
+    if ocf is not None and net_profit is not None:
+        ratio = ocf.reindex(net_profit.index).div(net_profit.replace(0, np.nan))
+        ratio = ratio.dropna()
+        if not ratio.empty:
+            years = [str(d.year) for d in ratio.index]
+            fig.add_trace(go.Bar(x=years, y=ratio.values, name='现金流/净利润',
+                                 marker_color=C_GREEN, showlegend=False,
+                                 text=[f"{v:.2f}" for v in ratio.values],
+                                 textposition='outside'), row=2, col=2)
+            fig.add_hline(y=1, line_dash="dash", line_color="gray",
+                          annotation_text="健康线 1.0", row=2, col=2)
+
+    fig.update_layout(height=700, showlegend=True,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02))
+    return fig
+
+
+# ====== 成长性指标图表 ======
+
+def plot_growth_analysis(income_stmt):
+    """成长性分析: 营收 & 净利润年度增长 + CAGR"""
+    annual = income_stmt[income_stmt.index.month == 12]
+    revenue_col = '营业总收入' if '营业总收入' in annual.columns else '营业收入'
+    np_col = '归属于母公司所有者的净利润' if '归属于母公司所有者的净利润' in annual.columns else '净利润'
+
+    revenue = annual.get(revenue_col)
+    net_profit = annual.get(np_col)
+    if revenue is None:
+        return None
+
+    # 取最近10年
+    if len(revenue) > 10:
+        revenue = revenue.iloc[-10:]
+    if net_profit is not None and len(net_profit) > 10:
+        net_profit = net_profit.iloc[-10:]
+
+    years = [str(d.year) for d in revenue.index]
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # 营收柱状图
+    fig.add_trace(go.Bar(
+        x=years, y=[v / 1e8 for v in revenue.values],
+        name='营业总收入', marker_color=C_BLUE, opacity=0.8,
+    ), secondary_y=False)
+
+    # 净利润折线
+    if net_profit is not None and not net_profit.empty:
+        np_aligned = net_profit.reindex(revenue.index)
+        fig.add_trace(go.Scatter(
+            x=years, y=[v / 1e8 if pd.notna(v) else None for v in np_aligned.values],
+            name='归母净利润', line=dict(color=C_RED, width=2),
+            mode='lines+markers',
+        ), secondary_y=False)
+
+    # 同比增长率 (右轴)
+    rev_yoy = revenue.pct_change() * 100
+    fig.add_trace(go.Scatter(
+        x=years, y=rev_yoy.values,
+        name='营收同比增速(%)', line=dict(color=C_GREEN, width=1.5, dash='dot'),
+        mode='lines+markers',
+    ), secondary_y=True)
+
+    if net_profit is not None:
+        np_yoy = net_profit.pct_change() * 100
+        np_aligned_yoy = np_yoy.reindex(revenue.index)
+        fig.add_trace(go.Scatter(
+            x=years, y=np_aligned_yoy.values,
+            name='净利润同比增速(%)', line=dict(color=C_PURPLE, width=1.5, dash='dot'),
+            mode='lines+markers',
+        ), secondary_y=True)
+
+    fig.update_xaxes(title_text="年度", tickangle=-45)
+    fig.update_yaxes(title_text="金额 (亿元)", secondary_y=False)
+    fig.update_yaxes(title_text="同比增长率 (%)", secondary_y=True)
+    fig.update_layout(
+        title="营收与净利润成长趋势",
+        hovermode='x unified',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=450,
+        barmode='group',
+    )
+    return fig
+
+
+def plot_rd_ratio_trend(income_stmt):
+    """研发投入占比趋势图"""
+    annual = income_stmt[income_stmt.index.month == 12]
+    revenue = annual.get('营业总收入', annual.get('营业收入'))
+    rd = annual.get('研发费用')
+    if revenue is None or rd is None:
+        return None
+
+    ratio = rd.reindex(revenue.index).div(revenue.replace(0, np.nan)) * 100
+    ratio = ratio.dropna()
+    if ratio.empty:
+        return None
+
+    years = [str(d.year) for d in ratio.index]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=years, y=ratio.values, name='研发费用/营收',
+        marker_color=C_PURPLE,
+        text=[f"{v:.1f}%" for v in ratio.values],
+        textposition='outside',
+    ))
+    fig.add_hline(y=5, line_dash="dash", line_color=C_ORANGE,
+                  annotation_text="研发密集型 5%")
+    fig.update_layout(
+        title="研发投入占营收比趋势 (年度)",
+        xaxis_title="年度", yaxis_title="占比 (%)",
+        height=350,
+    )
+    return fig
+
+
+def plot_quarterly_growth(income_stmt):
+    """季度营收同比增长趋势"""
+    from financial_metrics import calculate_quarterly_growth
+    qg = calculate_quarterly_growth(income_stmt)
+    if qg.empty:
+        return None
+
+    labels = [f"{d.year}-Q{((d.month-1)//3)+1}" for d in qg.index]
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig.add_trace(go.Bar(
+        x=labels, y=[v / 1e8 for v in qg['revenue'].values],
+        name='单季营收', marker_color=C_BLUE, opacity=0.8,
+    ), secondary_y=False)
+
+    if 'yoy' in qg.columns:
+        fig.add_trace(go.Scatter(
+            x=labels, y=qg['yoy'].values,
+            name='同比增速(%)', line=dict(color=C_GREEN, width=2),
+            mode='lines+markers',
+        ), secondary_y=True)
+
+    if 'qoq' in qg.columns:
+        fig.add_trace(go.Scatter(
+            x=labels, y=qg['qoq'].values,
+            name='环比增速(%)', line=dict(color=C_ORANGE, width=1.5, dash='dot'),
+            mode='lines+markers',
+        ), secondary_y=True)
+
+    fig.update_xaxes(title_text="季度", tickangle=-45)
+    fig.update_yaxes(title_text="单季营收 (亿元)", secondary_y=False)
+    fig.update_yaxes(title_text="增长率 (%)", secondary_y=True)
+    fig.update_layout(
+        title="季度营收增长趋势 (近12季)",
+        hovermode='x unified',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=400,
+    )
     return fig

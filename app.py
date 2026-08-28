@@ -20,6 +20,10 @@ from financial_metrics import (
     calculate_gross_margin, calculate_expense_ratio, calculate_roe,
     calculate_debt_ratio, determine_business_type,
     build_income_table, build_cashflow_table, generate_annual_report_analysis,
+    calculate_cagr, calculate_current_ratio, calculate_quick_ratio,
+    calculate_cashflow_to_profit_ratio, calculate_goodwill_ratio,
+    calculate_receivable_turnover_days, calculate_inventory_turnover_days,
+    calculate_rd_ratio, build_financial_quality_table,
 )
 from valuation import dcf_valuation, ddm_valuation, pb_valuation, pe_valuation, calculate_wacc
 from visualizations import (
@@ -32,6 +36,8 @@ from visualizations import (
     plot_pe_trend, plot_csi300_pe_trend,
     plot_industry_pe_trend, plot_industry_pe_distribution,
     plot_industry_peer_bars, plot_industry_marketcap_trend,
+    plot_debt_ratio_trend, plot_financial_quality_card,
+    plot_growth_analysis, plot_rd_ratio_trend, plot_quarterly_growth,
 )
 
 # ========== 页面配置 ==========
@@ -455,6 +461,132 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             if fig_cf:
                 st.plotly_chart(fig_cf, use_container_width=True)
 
+        st.markdown("---")
+
+        # ======== 7. 财务质量深度分析 ========
+        st.header("7. 财务质量深度分析")
+        st.caption("评估公司财务健康度：偿债能力、运营效率、盈利含金量、暴雷风险")
+
+        # 资产负债率趋势
+        st.subheader("📈 资产负债率趋势")
+        fig_debt = plot_debt_ratio_trend(balance_sheet)
+        if fig_debt:
+            st.plotly_chart(fig_debt, use_container_width=True)
+        else:
+            st.warning("暂无足够数据")
+
+        # 财务质量综合仪表板
+        st.subheader("📈 财务质量综合仪表板")
+        fig_quality = plot_financial_quality_card(income_stmt, balance_sheet, cash_flow)
+        if fig_quality:
+            st.plotly_chart(fig_quality, use_container_width=True)
+        else:
+            st.warning("暂无足够数据")
+
+        # 财务质量指标表
+        st.subheader("📊 财务质量指标表")
+        quality_table = build_financial_quality_table(income_stmt, balance_sheet, cash_flow)
+        if not quality_table.empty:
+            st.dataframe(
+                quality_table.style.format("{:.2f}"),
+                use_container_width=True,
+            )
+            # 指标解读
+            latest = quality_table.iloc[-1]
+            st.markdown("**最新年度指标解读：**")
+            interpretations = []
+            if '资产负债率(%)' in latest.index and pd.notna(latest['资产负债率(%)']):
+                dr = latest['资产负债率(%)']
+                if dr < 40:
+                    interpretations.append(f"✅ 资产负债率 {dr:.1f}%，财务结构稳健")
+                elif dr < 60:
+                    interpretations.append(f"⚠️ 资产负债率 {dr:.1f}%，财务结构适中")
+                else:
+                    interpretations.append(f"🔴 资产负债率 {dr:.1f}%，负债率较高，需关注偿债能力")
+            if '流动比率' in latest.index and pd.notna(latest['流动比率']):
+                cr = latest['流动比率']
+                if cr >= 2:
+                    interpretations.append(f"✅ 流动比率 {cr:.2f}，短期偿债能力强")
+                elif cr >= 1:
+                    interpretations.append(f"⚠️ 流动比率 {cr:.2f}，短期偿债能力一般")
+                else:
+                    interpretations.append(f"🔴 流动比率 {cr:.2f}，短期偿债能力不足")
+            if '现金流/净利润' in latest.index and pd.notna(latest['现金流/净利润']):
+                cr = latest['现金流/净利润']
+                if cr >= 1:
+                    interpretations.append(f"✅ 现金流/净利润 {cr:.2f}，盈利含金量高")
+                elif cr >= 0.5:
+                    interpretations.append(f"⚠️ 现金流/净利润 {cr:.2f}，盈利含金量一般")
+                else:
+                    interpretations.append(f"🔴 现金流/净利润 {cr:.2f}，盈利含金量低，需警惕")
+            if '商誉/净资产(%)' in latest.index and pd.notna(latest['商誉/净资产(%)']):
+                gr = latest['商誉/净资产(%)']
+                if gr > 30:
+                    interpretations.append(f"🔴 商誉占净资产 {gr:.1f}%，商誉减值风险较高")
+                elif gr > 10:
+                    interpretations.append(f"⚠️ 商誉占净资产 {gr:.1f}%，需关注减值风险")
+            for interp in interpretations:
+                st.markdown(f"- {interp}")
+        else:
+            st.info("暂无足够数据计算财务质量指标")
+
+        st.markdown("---")
+
+        # ======== 8. 成长性分析 ========
+        st.header("8. 成长性分析")
+        st.caption("评估公司成长能力：营收/净利润增长率、季度环比趋势、研发投入")
+
+        # 成长性卡片
+        annual_inc = income_stmt[income_stmt.index.month == 12]
+        rev_col = '营业总收入' if '营业总收入' in annual_inc.columns else '营业收入'
+        np_col = '归属于母公司所有者的净利润' if '归属于母公司所有者的净利润' in annual_inc.columns else '净利润'
+        revenue_annual = annual_inc.get(rev_col)
+        net_profit_annual = annual_inc.get(np_col)
+
+        col_g1, col_g2, col_g3, col_g4 = st.columns(4)
+        with col_g1:
+            rev_cagr = calculate_cagr(revenue_annual, years=3) if revenue_annual is not None else None
+            st.metric("营收3年CAGR", f"{rev_cagr:.1f}%" if rev_cagr is not None else "N/A")
+        with col_g2:
+            np_cagr = calculate_cagr(net_profit_annual, years=3) if net_profit_annual is not None else None
+            st.metric("净利润3年CAGR", f"{np_cagr:.1f}%" if np_cagr is not None else "N/A")
+        with col_g3:
+            if revenue_annual is not None and len(revenue_annual) >= 2:
+                rev_yoy = (revenue_annual.iloc[-1] / revenue_annual.iloc[-2] - 1) * 100 if revenue_annual.iloc[-2] != 0 else 0
+                st.metric("营收同比增速", f"{rev_yoy:.1f}%")
+            else:
+                st.metric("营收同比增速", "N/A")
+        with col_g4:
+            if net_profit_annual is not None and len(net_profit_annual) >= 2 and net_profit_annual.iloc[-2] != 0:
+                np_yoy = (net_profit_annual.iloc[-1] / net_profit_annual.iloc[-2] - 1) * 100
+                st.metric("净利润同比增速", f"{np_yoy:.1f}%")
+            else:
+                st.metric("净利润同比增速", "N/A")
+
+        # 营收与净利润成长趋势
+        st.subheader("📈 营收与净利润成长趋势")
+        fig_growth = plot_growth_analysis(income_stmt)
+        if fig_growth:
+            st.plotly_chart(fig_growth, use_container_width=True)
+        else:
+            st.warning("暂无足够数据")
+
+        # 季度营收增长趋势
+        st.subheader("📈 季度营收增长趋势")
+        fig_qg = plot_quarterly_growth(income_stmt)
+        if fig_qg:
+            st.plotly_chart(fig_qg, use_container_width=True)
+        else:
+            st.warning("暂无足够数据生成季度增长图")
+
+        # 研发投入占比趋势
+        st.subheader("📈 研发投入占比趋势")
+        fig_rd = plot_rd_ratio_trend(income_stmt)
+        if fig_rd:
+            st.plotly_chart(fig_rd, use_container_width=True)
+        else:
+            st.info("暂无研发费用数据")
+
     # ==================== Tab 2: 公司估值分析 ====================
     with tab2:
         st.header("💰 公司估值分析")
@@ -818,7 +950,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
 
         # ======== 5. 同业估值对比 ========
         st.subheader("5. 同业估值对比")
-        col_bars1, col_bars2 = st.columns(2)
+        col_bars1, col_bars2, col_bars3 = st.columns(3)
         with col_bars1:
             fig_bars_pe = plot_industry_peer_bars(peers, stock_code, stock_name, 'pe', top_n=15)
             if fig_bars_pe:
@@ -827,6 +959,10 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             fig_bars_pb = plot_industry_peer_bars(peers, stock_code, stock_name, 'pb', top_n=15)
             if fig_bars_pb:
                 st.plotly_chart(fig_bars_pb, use_container_width=True)
+        with col_bars3:
+            fig_bars_roe = plot_industry_peer_bars(peers, stock_code, stock_name, 'roe', top_n=15)
+            if fig_bars_roe:
+                st.plotly_chart(fig_bars_roe, use_container_width=True)
 
         st.markdown("---")
 
@@ -834,7 +970,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         st.subheader("6. 同业对比表")
         display_df = peers.copy()
         display_df.columns = [
-            '代码', '名称', '最新价', '涨跌幅(%)', 'PE(动态)', 'PB',
+            '代码', '名称', '最新价', '涨跌幅(%)', 'PE(动态)', 'PB', 'ROE(%)',
             '总市值(亿)', '流通市值(亿)', '换手率(%)',
         ]
         display_df = display_df.sort_values('总市值(亿)', ascending=False)
@@ -844,6 +980,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                 '涨跌幅(%)': '{:.2f}',
                 'PE(动态)': '{:.1f}',
                 'PB': '{:.2f}',
+                'ROE(%)': '{:.2f}',
                 '总市值(亿)': '{:.1f}',
                 '流通市值(亿)': '{:.1f}',
                 '换手率(%)': '{:.2f}',
@@ -851,6 +988,21 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             use_container_width=True,
             hide_index=True,
         )
+
+        # 行业平均指标
+        st.markdown("**行业平均指标**")
+        valid_pe = peers[peers['pe'] > 0]
+        valid_pb = peers[peers['pb'] > 0]
+        valid_roe = peers[peers['roe'] > 0]
+        avg_cols = st.columns(4)
+        with avg_cols[0]:
+            st.metric("行业平均PE", f"{valid_pe['pe'].mean():.1f}" if not valid_pe.empty else "N/A")
+        with avg_cols[1]:
+            st.metric("行业平均PB", f"{valid_pb['pb'].mean():.2f}" if not valid_pb.empty else "N/A")
+        with avg_cols[2]:
+            st.metric("行业平均ROE", f"{valid_roe['roe'].mean():.2f}%" if not valid_roe.empty else "N/A")
+        with avg_cols[3]:
+            st.metric("行业总市值", f"{peers['market_cap_yi'].sum():.0f} 亿元")
 
         st.markdown("---")
 
@@ -862,8 +1014,9 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
 
             valid_pe = peers[peers['pe'] > 0]
             valid_pb = peers[peers['pb'] > 0]
+            valid_roe = peers[peers['roe'] > 0]
 
-            rank_cols = st.columns(3)
+            rank_cols = st.columns(4)
             with rank_cols[0]:
                 if stock_row['pe'] > 0 and not valid_pe.empty:
                     pe_rank = int((valid_pe['pe'] < stock_row['pe']).sum()) + 1
@@ -881,12 +1034,21 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                     st.metric("P/B 排名", "N/A")
 
             with rank_cols[2]:
+                if stock_row['roe'] > 0 and not valid_roe.empty:
+                    roe_rank = int((valid_roe['roe'] > stock_row['roe']).sum()) + 1
+                    st.metric("ROE 排名", f"第 {roe_rank} / {len(valid_roe)}",
+                              f"当前: {stock_row['roe']:.2f}%")
+                else:
+                    st.metric("ROE 排名", "N/A")
+
+            with rank_cols[3]:
                 mc_rank = int((peers['market_cap_yi'] > stock_row['market_cap_yi']).sum()) + 1
                 st.metric("总市值排名", f"第 {mc_rank} / {len(peers)}",
                           f"当前: {stock_row['market_cap_yi']:.1f}亿")
 
             st.markdown("")
             st.markdown("**排名说明**: P/E和P/B排名中，排名越靠前表示估值越低（越便宜）。"
+                        "ROE排名中，排名越靠前表示盈利能力越强。"
                         "总市值排名反映公司在行业中的规模地位。")
         else:
             st.warning("当前个股不在同业板块成分股列表中，无法计算排名")

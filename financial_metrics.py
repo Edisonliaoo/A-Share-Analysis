@@ -115,6 +115,216 @@ def determine_business_type(income_stmt, balance_sheet):
     return "、".join(types) if types else "未分类"
 
 
+# ====== 财务质量深度指标 ======
+
+def calculate_current_ratio(balance_sheet):
+    """流动比率 = 流动资产合计 / 流动负债合计"""
+    ca = balance_sheet.get('流动资产合计')
+    cl = balance_sheet.get('流动负债合计')
+    if ca is None or cl is None:
+        return pd.Series(dtype=float)
+    return ca.div(cl.replace(0, np.nan)) * 1
+
+
+def calculate_quick_ratio(balance_sheet):
+    """速动比率 = (流动资产合计 - 存货) / 流动负债合计"""
+    ca = balance_sheet.get('流动资产合计')
+    inv = balance_sheet.get('存货')
+    cl = balance_sheet.get('流动负债合计')
+    if ca is None or cl is None:
+        return pd.Series(dtype=float)
+    inv_val = inv if inv is not None else 0
+    return (ca - inv_val).div(cl.replace(0, np.nan))
+
+
+def calculate_receivable_turnover_days(income_stmt, balance_sheet):
+    """应收账款周转天数 = 365 / (营收 / 平均应收账款)"""
+    revenue = income_stmt.get('营业总收入', income_stmt.get('营业收入'))
+    ar = balance_sheet.get('应收票据及应收账款')
+    if revenue is None or ar is None:
+        return pd.Series(dtype=float)
+    annual_rev = revenue[revenue.index.month == 12]
+    annual_ar = ar[ar.index.month == 12]
+    if len(annual_ar) < 2:
+        avg_ar = annual_ar
+    else:
+        avg_ar = (annual_ar + annual_ar.shift(1)) / 2
+        avg_ar = avg_ar.dropna()
+    turnover = annual_rev.reindex(avg_ar.index).div(avg_ar.replace(0, np.nan))
+    return 365 / turnover
+
+
+def calculate_inventory_turnover_days(income_stmt, balance_sheet):
+    """存货周转天数 = 365 / (营业成本 / 平均存货)"""
+    cost = income_stmt.get('营业总成本', income_stmt.get('营业成本'))
+    inv = balance_sheet.get('存货')
+    if cost is None or inv is None:
+        return pd.Series(dtype=float)
+    annual_cost = cost[cost.index.month == 12]
+    annual_inv = inv[inv.index.month == 12]
+    if len(annual_inv) < 2:
+        avg_inv = annual_inv
+    else:
+        avg_inv = (annual_inv + annual_inv.shift(1)) / 2
+        avg_inv = avg_inv.dropna()
+    turnover = annual_cost.reindex(avg_inv.index).div(avg_inv.replace(0, np.nan))
+    return 365 / turnover
+
+
+def calculate_cashflow_to_profit_ratio(cash_flow, income_stmt):
+    """经营现金流/净利润比 (盈利含金量)"""
+    ocf = cash_flow.get('经营活动产生的现金流量净额')
+    np_col = '归属于母公司所有者的净利润' if '归属于母公司所有者的净利润' in income_stmt.columns else '净利润'
+    net_profit = income_stmt.get(np_col)
+    if ocf is None or net_profit is None:
+        return pd.Series(dtype=float)
+    annual_ocf = ocf[ocf.index.month == 12]
+    annual_np = net_profit[net_profit.index.month == 12]
+    return annual_ocf.reindex(annual_np.index).div(annual_np.replace(0, np.nan))
+
+
+def calculate_goodwill_ratio(balance_sheet):
+    """商誉占净资产比 = 商誉 / 归属于母公司股东权益合计"""
+    gw = balance_sheet.get('商誉')
+    eq = balance_sheet.get('归属于母公司股东权益合计')
+    if gw is None or eq is None:
+        return pd.Series(dtype=float)
+    return gw.div(eq.replace(0, np.nan)) * 100
+
+
+# ====== 成长性指标 ======
+
+def calculate_cagr(series, years=3):
+    """计算N年复合年增长率 (CAGR)
+    series: pd.Series, 年度数据
+    years: 回看年数
+    返回: float 或 None
+    """
+    if series is None or len(series) < years + 1:
+        return None
+    start = series.iloc[-years - 1]
+    end = series.iloc[-1]
+    if pd.isna(start) or pd.isna(end) or start <= 0 or end <= 0:
+        return None
+    return ((end / start) ** (1.0 / years) - 1) * 100
+
+
+def calculate_quarterly_growth(income_stmt):
+    """计算季度营收环比增长率
+    返回: pd.DataFrame with columns [quarter, revenue, yoy_growth, qoq_growth]
+    """
+    revenue_col = '营业总收入' if '营业总收入' in income_stmt.columns else '营业收入'
+    if revenue_col not in income_stmt.columns:
+        return pd.DataFrame()
+
+    rev = income_stmt[revenue_col].dropna()
+    # 累计值转单季值
+    single_q = rev.copy()
+    for i in range(len(single_q) - 1, 0, -1):
+        curr = single_q.index[i]
+        prev_idx = None
+        for j in range(i - 1, -1, -1):
+            if single_q.index[j].year == curr.year:
+                prev_idx = j
+                break
+        if prev_idx is not None:
+            single_q.iloc[i] = rev.iloc[i] - rev.iloc[prev_idx]
+
+    # 同比增长率
+    yoy = pd.Series(dtype=float, index=single_q.index)
+    for i in range(len(single_q)):
+        curr = single_q.index[i]
+        for j in range(i - 1, -1, -1):
+            prev = single_q.index[j]
+            if prev.month == curr.month and prev.year == curr.year - 1:
+                if single_q.iloc[j] != 0:
+                    yoy.iloc[i] = (single_q.iloc[i] / single_q.iloc[j] - 1) * 100
+                break
+
+    # 环比增长率
+    qoq = single_q.pct_change() * 100
+
+    result = pd.DataFrame({
+        'revenue': single_q,
+        'yoy': yoy,
+        'qoq': qoq,
+    }).dropna(subset=['revenue'])
+
+    return result.tail(12)
+
+
+def calculate_rd_ratio(income_stmt):
+    """研发投入占比 = 研发费用 / 营业总收入"""
+    revenue = income_stmt.get('营业总收入', income_stmt.get('营业收入'))
+    rd = income_stmt.get('研发费用')
+    if revenue is None or rd is None:
+        return pd.Series(dtype=float)
+    annual_rev = revenue[revenue.index.month == 12]
+    annual_rd = rd[rd.index.month == 12]
+    return annual_rd.reindex(annual_rev.index).div(annual_rev.replace(0, np.nan)) * 100
+
+
+def build_financial_quality_table(income_stmt, balance_sheet, cash_flow):
+    """构建财务质量指标综合表（年度）"""
+    annual_inc = income_stmt[income_stmt.index.month == 12]
+    annual_bs = balance_sheet[balance_sheet.index.month == 12]
+    annual_cf = cash_flow[cash_flow.index.month == 12]
+
+    result = pd.DataFrame(index=annual_bs.index)
+
+    # 资产负债率
+    total_liab = annual_bs.get('负债合计')
+    total_assets = annual_bs.get('资产总计')
+    if total_liab is not None and total_assets is not None:
+        result['资产负债率(%)'] = total_liab.div(total_assets.replace(0, np.nan)) * 100
+
+    # 流动比率
+    ca = annual_bs.get('流动资产合计')
+    cl = annual_bs.get('流动负债合计')
+    if ca is not None and cl is not None:
+        result['流动比率'] = ca.div(cl.replace(0, np.nan))
+
+    # 速动比率
+    inv = annual_bs.get('存货')
+    if ca is not None and cl is not None:
+        inv_val = inv if inv is not None else 0
+        result['速动比率'] = (ca - inv_val).div(cl.replace(0, np.nan))
+
+    # 应收账款周转天数
+    rev = annual_inc.get('营业总收入', annual_inc.get('营业收入'))
+    ar = annual_bs.get('应收票据及应收账款')
+    if rev is not None and ar is not None and len(ar) >= 2:
+        avg_ar = (ar + ar.shift(1)) / 2
+        avg_ar = avg_ar.dropna()
+        turnover = rev.reindex(avg_ar.index).div(avg_ar.replace(0, np.nan))
+        result['应收账款周转天数'] = 365 / turnover
+
+    # 存货周转天数
+    cost = annual_inc.get('营业总成本', annual_inc.get('营业成本'))
+    if cost is not None and inv is not None and len(inv) >= 2:
+        avg_inv = (inv + inv.shift(1)) / 2
+        avg_inv = avg_inv.dropna()
+        turnover = cost.reindex(avg_inv.index).div(avg_inv.replace(0, np.nan))
+        result['存货周转天数'] = 365 / turnover
+
+    # 现金流/净利润比
+    ocf = annual_cf.get('经营活动产生的现金流量净额')
+    np_col = '归属于母公司所有者的净利润' if '归属于母公司所有者的净利润' in annual_inc.columns else '净利润'
+    net_profit = annual_inc.get(np_col)
+    if ocf is not None and net_profit is not None:
+        result['现金流/净利润'] = ocf.reindex(net_profit.index).div(net_profit.replace(0, np.nan))
+
+    # 商誉占净资产比
+    gw = annual_bs.get('商誉')
+    eq = annual_bs.get('归属于母公司股东权益合计')
+    if gw is not None and eq is not None:
+        result['商誉/净资产(%)'] = gw.div(eq.replace(0, np.nan)) * 100
+
+    result.index = [str(d.year) for d in result.index]
+    result.index.name = '年度'
+    return result
+
+
 def build_income_table(income_stmt, annual_only=True):
     """
     构建利润表展示表（只含用户关心的指标）
