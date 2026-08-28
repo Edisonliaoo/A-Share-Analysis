@@ -15,7 +15,9 @@ from data_fetcher import (
     search_stocks, fetch_all_data, get_company_info, get_csi300_pe_data,
     get_industry_board_name, get_industry_peers,
     get_industry_index_data, compute_industry_pe_history,
-    get_stock_summary,
+    get_stock_summary, screen_stocks,
+    get_top_shareholders, get_shareholder_count, get_insider_trading,
+    get_analyst_consensus,
 )
 from financial_metrics import (
     calculate_gross_margin, calculate_expense_ratio, calculate_roe,
@@ -627,6 +629,72 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         else:
             st.info("暂无研发费用数据")
 
+        st.markdown("---")
+
+        # ======== 9. 管理层与股东分析 ========
+        st.header("9. 管理层与股东分析")
+        st.caption("十大股东、股东人数变化、高管增减持")
+
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def fetch_shareholders(code):
+            return get_top_shareholders(code)
+
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def fetch_holder_count(code):
+            return get_shareholder_count(code)
+
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def fetch_insider(code):
+            return get_insider_trading(code)
+
+        shareholders = fetch_shareholders(stock['code'])
+        holder_counts = fetch_holder_count(stock['code'])
+        insider_deals = fetch_insider(stock['code'])
+
+        # 十大股东
+        st.subheader("📊 十大股东（最新）")
+        if shareholders:
+            sh_df = pd.DataFrame(shareholders)
+            sh_df.columns = ['股东名称', '持股比例(%)', '增减变化', '股东类型', '报告期']
+            st.dataframe(sh_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("暂无十大股东数据")
+
+        # 股东人数变化
+        st.subheader("📊 股东人数变化")
+        if holder_counts:
+            hc_df = pd.DataFrame(holder_counts)
+            hc_df.columns = ['报告期', '股东人数', '人均持股', '变化比例(%)']
+            st.dataframe(
+                hc_df.style.format({
+                    '股东人数': '{:,.0f}',
+                    '人均持股': '{:,.0f}',
+                    '变化比例(%)': '{:.2f}',
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("暂无股东人数数据")
+
+        # 高管增减持
+        st.subheader("📊 高管增减持")
+        if insider_deals:
+            id_df = pd.DataFrame(insider_deals)
+            id_df.columns = ['变动人', '变动日期', '变动股数', '变动比例(%)', '均价', '变动后持股', '与公司关系']
+            st.dataframe(
+                id_df.style.format({
+                    '变动股数': '{:,.0f}',
+                    '变动比例(%)': '{:.2f}',
+                    '均价': '{:.2f}',
+                    '变动后持股': '{:,.0f}',
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("暂无高管增减持记录")
+
     # ==================== Tab 2: 公司估值分析 ====================
     with tab2:
         st.header("💰 公司估值分析")
@@ -984,6 +1052,101 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.info("暂无足够数据计算风险指标")
 
         st.markdown("---")
+
+        # ======== 研报/机构观点 ========
+        st.header("📊 机构一致预期")
+        st.caption("机构预测EPS、营收、目标价汇总")
+
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def fetch_consensus(code):
+            return get_analyst_consensus(code)
+
+        consensus = fetch_consensus(stock['code'])
+        if consensus:
+            cons_df = pd.DataFrame(consensus)
+            cons_df.columns = ['报告日期', '预测年度', '预测EPS', '预测营收',
+                              '预测净利润', '预测PE', '机构数', '评级', '目标价']
+            st.dataframe(
+                cons_df.style.format({
+                    '预测EPS': '{:.2f}',
+                    '预测营收': '{:,.0f}',
+                    '预测净利润': '{:,.0f}',
+                    '预测PE': '{:.1f}',
+                    '机构数': '{:.0f}',
+                    '目标价': '{:.2f}',
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # 汇总指标
+            latest = consensus[0]
+            col_c1, col_c2, col_c3 = st.columns(3)
+            with col_c1:
+                if latest.get('forecast_eps') is not None:
+                    st.metric("一致预期EPS", f"{latest['forecast_eps']:.2f} 元")
+            with col_c2:
+                if latest.get('target_price') is not None:
+                    st.metric("一致目标价", f"{latest['target_price']:.2f} 元")
+            with col_c3:
+                if latest.get('org_count') is not None:
+                    st.metric("覆盖机构数", f"{int(latest['org_count'])} 家")
+
+            if current_price > 0 and latest.get('target_price') and latest['target_price'] > 0:
+                upside = (latest['target_price'] - current_price) / current_price * 100
+                st.metric("目标价空间", f"{upside:+.1f}%")
+        else:
+            st.info("暂无机构一致预期数据")
+
+        st.markdown("---")
+
+        # ======== 导出功能 ========
+        st.header("📥 导出分析数据")
+        @st.cache_data(ttl=300, show_spinner=False)
+        def build_export_data(code, exchange):
+            """构建导出用的Excel数据"""
+            from io import BytesIO
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # 利润表
+                income_table = build_income_table(income_stmt, annual_only=True)
+                if not income_table.empty:
+                    income_table.to_excel(writer, sheet_name='利润表指标')
+                # 现金流表
+                cf_table = build_cashflow_table(cash_flow, annual_only=True)
+                if not cf_table.empty:
+                    cf_table.to_excel(writer, sheet_name='现金流指标')
+                # 财务质量
+                quality_table = build_financial_quality_table(income_stmt, balance_sheet, cash_flow)
+                if not quality_table.empty:
+                    quality_table.to_excel(writer, sheet_name='财务质量指标')
+                # 分红历史
+                if dividend_history:
+                    div_table = build_dividend_table(dividend_history)
+                    if not div_table.empty:
+                        div_table.to_excel(writer, sheet_name='分红历史')
+                # 十大股东
+                shareholders = get_top_shareholders(code)
+                if shareholders:
+                    pd.DataFrame(shareholders).to_excel(writer, sheet_name='十大股东', index=False)
+                # 风险指标
+                if risk_metrics:
+                    pd.DataFrame([risk_metrics]).to_excel(writer, sheet_name='风险指标', index=False)
+            output.seek(0)
+            return output.getvalue()
+
+        try:
+            excel_data = build_export_data(stock['code'], stock['exchange'])
+            st.download_button(
+                "📥 导出 Excel",
+                data=excel_data,
+                file_name=f"{stock['name']}_{stock['code']}_分析数据.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        except Exception:
+            st.warning("导出数据时出错")
+
+        st.markdown("---")
         st.caption("⚠️ 免责声明: 本工具仅用于学习和研究目的，所有估值结果仅供参考，不构成投资建议。")
 
     # ==================== Tab 3: 行业对标 ====================
@@ -1284,7 +1447,8 @@ else:
         "2. 从下拉列表中选择目标股票\n"
         "3. 点击 **📥 加载数据** 按钮\n"
         "4. 系统将自动获取该股票的**季度+年度财报数据**、**历史市值**和**主营构成**\n"
-        "5. 在三个标签页中查看**财务分析**、**估值分析**和**行业对标**"
+        "5. 在四个标签页中查看**财务分析**、**估值分析**、**行业对标**和**多股对比**\n"
+        "6. 使用下方**选股筛选器**按PE/PB/ROE等条件批量筛选股票"
     )
 
     st.markdown("---")
@@ -1321,3 +1485,53 @@ else:
             st.info("当前估值处于历史中等水平")
     else:
         st.warning("暂无法获取沪深300市盈率数据")
+
+    st.markdown("---")
+    st.header("🔍 选股筛选器")
+    st.caption("按PE/PB/ROE/市值等条件批量筛选A股")
+
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+    with col_s1:
+        pe_min = st.number_input("PE 最小值", 0.0, 500.0, 0.0, step=5.0)
+        pe_max = st.number_input("PE 最大值", 0.0, 1000.0, 100.0, step=5.0)
+    with col_s2:
+        pb_max = st.number_input("PB 最大值", 0.0, 100.0, 20.0, step=1.0)
+        roe_min = st.number_input("ROE 最小值(%)", 0.0, 100.0, 0.0, step=1.0)
+    with col_s3:
+        mc_min = st.number_input("最小市值(亿)", 0.0, 100000.0, 0.0, step=50.0)
+        limit = st.slider("返回数量", 10, 200, 50, step=10)
+    with col_s4:
+        sort_options = {
+            'market_cap_yi': '总市值', 'pe': '市盈率', 'pb': '市净率',
+            'roe': 'ROE', 'turnover_rate': '换手率', 'change_pct': '涨跌幅',
+        }
+        sort_by = st.selectbox("排序方式", list(sort_options.keys()),
+                               format_func=lambda x: sort_options[x])
+        run_screen = st.button("🔍 开始筛选", type="primary")
+
+    if run_screen or 'screen_result' in st.session_state:
+        if run_screen:
+            with st.spinner("正在筛选..."):
+                st.session_state['screen_result'] = screen_stocks(
+                    pe_min=pe_min, pe_max=pe_max, pb_max=pb_max,
+                    roe_min=roe_min, market_cap_min_yi=mc_min,
+                    sort_by=sort_by, limit=limit,
+                )
+        result = st.session_state.get('screen_result')
+        if result is not None and not result.empty:
+            display = result[['code', 'name', 'price', 'change_pct', 'pe', 'pb',
+                            'roe', 'market_cap_yi', 'turnover_rate']].copy()
+            display.columns = ['代码', '名称', '最新价', '涨跌幅(%)', 'PE', 'PB',
+                              'ROE(%)', '总市值(亿)', '换手率(%)']
+            st.dataframe(
+                display.style.format({
+                    '最新价': '{:.2f}', '涨跌幅(%)': '{:.2f}',
+                    'PE': '{:.1f}', 'PB': '{:.2f}', 'ROE(%)': '{:.2f}',
+                    '总市值(亿)': '{:.1f}', '换手率(%)': '{:.2f}',
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(f"共筛选出 {len(result)} 只符合条件的股票")
+        else:
+            st.warning("没有符合条件的股票，请调整筛选条件")

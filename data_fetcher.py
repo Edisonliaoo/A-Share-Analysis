@@ -1347,3 +1347,276 @@ def get_stock_summary(code):
         }
     except Exception:
         return None
+
+
+# ====== 选股筛选器 ======
+
+def screen_stocks(pe_min=0, pe_max=200, pb_max=20, roe_min=0,
+                  market_cap_min_yi=0, sort_by='market_cap_yi', limit=100):
+    """
+    按条件筛选A股股票（来自东方财富clist API）
+    返回: DataFrame with [code, name, price, change_pct, pe, pb, roe, market_cap_yi, turnover_rate]
+    """
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+        'Referer': 'https://data.eastmoney.com',
+    })
+
+    sort_map = {
+        'market_cap_yi': 'f20',
+        'pe': 'f9',
+        'pb': 'f23',
+        'roe': 'f115',
+        'turnover_rate': 'f8',
+        'change_pct': 'f3',
+    }
+    sort_field = sort_map.get(sort_by, 'f20')
+
+    url = 'https://push2.eastmoney.com/api/qt/clist/get'
+    params = {
+        'pn': 1, 'pz': min(limit * 5, 5000),
+        'po': 1, 'np': 1,
+        'fltt': 2, 'invt': 2,
+        'fs': 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81,s:000001',
+        'fields': 'f2,f3,f8,f9,f12,f14,f20,f21,f23,f115',
+        'fid': sort_field,
+    }
+
+    try:
+        r = session.get(url, params=params, timeout=20)
+        data = r.json()
+        stocks = data.get('data', {}).get('diff', [])
+        if not stocks:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(stocks)
+        result = pd.DataFrame()
+        result['code'] = df['f12'].astype(str)
+        result['name'] = df['f14']
+        result['price'] = pd.to_numeric(df.get('f2', 0), errors='coerce')
+        result['change_pct'] = pd.to_numeric(df.get('f3', 0), errors='coerce')
+        result['turnover_rate'] = pd.to_numeric(df.get('f8', 0), errors='coerce')
+        result['pe'] = pd.to_numeric(df.get('f9', 0), errors='coerce')
+        result['pb'] = pd.to_numeric(df.get('f23', 0), errors='coerce')
+        result['roe'] = pd.to_numeric(df.get('f115', 0), errors='coerce')
+        result['market_cap_yi'] = pd.to_numeric(df.get('f20', 0), errors='coerce') / 1e8
+        result['circ_market_cap_yi'] = pd.to_numeric(df.get('f21', 0), errors='coerce') / 1e8
+
+        result = result[result['price'] > 0]
+        result = result[result['market_cap_yi'] > 0]
+        result = result[(result['pe'] >= pe_min) & (result['pe'] <= pe_max)]
+        result = result[result['pb'] <= pb_max]
+        result = result[result['roe'] >= roe_min]
+        result = result[result['market_cap_yi'] >= market_cap_min_yi]
+
+        if sort_by in result.columns:
+            result = result.sort_values(sort_by, ascending=(sort_by in ['pe', 'pb']))
+
+        return result.head(limit)
+    except Exception:
+        return pd.DataFrame()
+
+
+# ====== 管理层与股东分析 ======
+
+def _build_secucode(code):
+    if code.startswith('6') or code.startswith('9'):
+        return f"{code}.SH"
+    elif code.startswith('0') or code.startswith('3') or code.startswith('2'):
+        return f"{code}.SZ"
+    else:
+        return f"{code}.BJ"
+
+
+def get_top_shareholders(code):
+    """
+    获取十大股东信息
+    返回: list of dict
+    """
+    secucode = _build_secucode(code)
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://data.eastmoney.com',
+    })
+
+    url = 'https://datacenter.eastmoney.com/securities/api/data/v1/get'
+    params = {
+        'reportName': 'RPT_F10_EH_HOLDERS',
+        'columns': 'ALL',
+        'filter': f'(SECUCODE="{secucode}")',
+        'pageNumber': 1,
+        'pageSize': 10,
+        'sortColumns': 'HOLD_NUM_RATIO',
+        'sortTypes': '-1',
+    }
+
+    try:
+        r = session.get(url, params=params, timeout=15)
+        data = r.json()
+        records = data.get('result', {}).get('data', [])
+        if not records:
+            return []
+        result = []
+        for rec in records:
+            result.append({
+                'holder_name': rec.get('HOLDER_NAME', ''),
+                'hold_ratio': rec.get('HOLD_NUM_RATIO'),
+                'hold_change': rec.get('HOLD_CHANGE'),
+                'holder_type': rec.get('HOLDER_NEW_TYPE', ''),
+                'report_date': rec.get('END_DATE', ''),
+            })
+        return result
+    except Exception:
+        return []
+
+
+def get_shareholder_count(code):
+    """
+    获取股东人数变化历史
+    返回: list of dict
+    """
+    secucode = _build_secucode(code)
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://data.eastmoney.com',
+    })
+
+    url = 'https://datacenter.eastmoney.com/securities/api/data/v1/get'
+    params = {
+        'reportName': 'RPT_F10_EH_HOLDERNUM',
+        'columns': 'ALL',
+        'filter': f'(SECUCODE="{secucode}")',
+        'pageNumber': 1,
+        'pageSize': 50,
+        'sortColumns': 'END_DATE',
+        'sortTypes': '-1',
+    }
+
+    try:
+        r = session.get(url, params=params, timeout=15)
+        data = r.json()
+        records = data.get('result', {}).get('data', [])
+        if not records:
+            return []
+        result = []
+        for rec in records:
+            result.append({
+                'report_date': rec.get('END_DATE', ''),
+                'holder_num': rec.get('HOLDER_NUM'),
+                'avg_hold_num': rec.get('AVG_HOLD_NUM'),
+                'change_pct': rec.get('HOLDER_NUM_CHANGE_RATIO'),
+            })
+        return result
+    except Exception:
+        return []
+
+
+def get_insider_trading(code):
+    """
+    获取高管增减持记录
+    返回: list of dict
+    """
+    secucode = _build_secucode(code)
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://data.eastmoney.com',
+    })
+
+    all_records = []
+    page = 1
+    while page <= 5:
+        url = 'https://datacenter.eastmoney.com/securities/api/data/v1/get'
+        params = {
+            'reportName': 'RPT_F10_EH_DEAL',
+            'columns': 'ALL',
+            'filter': f'(SECUCODE="{secucode}")',
+            'pageNumber': page,
+            'pageSize': 50,
+            'sortColumns': 'START_DATE',
+            'sortTypes': '-1',
+        }
+        try:
+            r = session.get(url, params=params, timeout=15)
+            data = r.json()
+            records = data.get('result', {}).get('data', [])
+            if not records:
+                break
+            all_records.extend(records)
+            if len(records) < 50:
+                break
+            page += 1
+        except Exception:
+            break
+
+    if not all_records:
+        return []
+    result = []
+    for rec in all_records:
+        result.append({
+            'manager_name': rec.get('MANAGER_NAME', ''),
+            'change_date': rec.get('START_DATE', ''),
+            'change_num': rec.get('CHANGE_NUM'),
+            'change_ratio': rec.get('CHANGE_RATIO_PCT'),
+            'avg_price': rec.get('AVG_PRICE'),
+            'after_change': rec.get('CHANGE_NUM_AFT'),
+            'relation': rec.get('RELATION_WITH_COMPANY', ''),
+        })
+    return result
+
+
+# ====== 研报/机构观点聚合 ======
+
+def get_analyst_consensus(code):
+    """
+    获取机构一致预期
+    返回: list of dict
+    """
+    secucode = _build_secucode(code)
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://data.eastmoney.com',
+    })
+
+    url = 'https://datacenter.eastmoney.com/securities/api/data/v1/get'
+    params = {
+        'reportName': 'RPT_F10_FIN_MAIN_FINFORECAST',
+        'columns': 'ALL',
+        'filter': f'(SECUCODE="{secucode}")',
+        'pageNumber': 1,
+        'pageSize': 50,
+        'sortColumns': 'REPORT_DATE',
+        'sortTypes': '-1',
+    }
+
+    try:
+        r = session.get(url, params=params, timeout=15)
+        data = r.json()
+        records = data.get('result', {}).get('data', [])
+        if not records:
+            return []
+        result = []
+        for rec in records:
+            result.append({
+                'report_date': rec.get('REPORT_DATE', ''),
+                'forecast_year': rec.get('FORECAST_YEAR', ''),
+                'forecast_eps': rec.get('FORECAST_EPS'),
+                'forecast_revenue': rec.get('FORECAST_INCOME'),
+                'forecast_profit': rec.get('FORECAST_PROFIT'),
+                'forecast_pe': rec.get('FORECAST_PE'),
+                'org_count': rec.get('ORG_NUM'),
+                'rating': rec.get('RATING', ''),
+                'target_price': rec.get('TARGET_PRICE'),
+            })
+        return result
+    except Exception:
+        return []
