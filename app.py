@@ -51,7 +51,6 @@ from visualizations import (
 # ========== 页面配置 ==========
 st.set_page_config(
     page_title="A股投资分析",
-    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded",
 )

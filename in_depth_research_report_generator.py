@@ -34,8 +34,8 @@ def get_background():
 '''
 
 def get_llm():
-    api_key = "f60e31b8-0380-45e1-89e9-0478c5dbf4f9"
-    base_url = "https://ark.cn-beijing.volces.com/api/v3"
+    api_key = os.getenv("ARK_API_KEY", "")
+    base_url = os.getenv("OPENAI_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
     model = "deepseek-r1-250528"
     llm_config = LLMConfig(api_key=api_key, base_url=base_url, model=model)
     return LLMHelper(llm_config)

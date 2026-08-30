@@ -22,10 +22,9 @@ from duckduckgo_search import DDGS
 
 # ========== 环境变量与全局配置 ==========
 load_dotenv()
-api_key = "f60e31b8-0380-45e1-89e9-0478c5dbf4f9"
+api_key = os.getenv("ARK_API_KEY", "")
 base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 model = "doubao-seed-1-6-250615"
-print(api_key,base_url,model)
 
 target_company = "商汤科技"
 target_company_code = "00020"

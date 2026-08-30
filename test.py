@@ -6,8 +6,7 @@ from openai import OpenAI
 client = OpenAI(
     # 此为默认路径，您可根据业务所在地域进行配置
     base_url="https://ark.cn-beijing.volces.com/api/v3",
-    # 从环境变量中获取您的 API Key
-    api_key="f60e31b8-0380-45e1-89e9-0478c5dbf4f9",
+    api_key=os.getenv("ARK_API_KEY", ""),
 )
 
 # Non-streaming:

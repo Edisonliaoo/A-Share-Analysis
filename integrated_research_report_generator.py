@@ -34,11 +34,9 @@ class IntegratedResearchReportGenerator:
     def __init__(self, target_company="商汤科技", target_company_code="00020", target_company_market="HK", search_engine="ddg"):
         # 环境变量与全局配置
         load_dotenv()
-        self.api_key = "f60e31b8-0380-45e1-89e9-0478c5dbf4f9"
-        self.base_url = "https://ark.cn-beijing.volces.com/api/v3"
+        self.api_key = os.getenv("ARK_API_KEY", "")
+        self.base_url = os.getenv("OPENAI_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
         self.model = "doubao-seed-1-6-thinking-250615"
-        # 打印模型
-        print(f"🔧 使用的模型: {self.model}")
         self.target_company = target_company
         self.target_company_code = target_company_code
         self.target_company_market = target_company_market

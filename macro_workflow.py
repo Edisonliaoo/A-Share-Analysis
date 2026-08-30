@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 从环境变量中初始化 OpenAI API 密钥
-openai.api_key = "f60e31b8-0380-45e1-89e9-0478c5dbf4f9"
-openai.api_base = "https://ark.cn-beijing.volces.com/api/v3"
+openai.api_key = os.getenv("ARK_API_KEY", "")
+openai.api_base = os.getenv("OPENAI_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
 
 class IndustryResearchFlow(Node):  # 研报生成的决策节点
     def prep(self, shared):
