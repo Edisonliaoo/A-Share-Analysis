@@ -642,7 +642,10 @@ def get_beta(code, exchange, years=2):
         index_r = index_returns.loc[common_dates]
 
         cov_matrix = np.cov(stock_r, index_r)
-        beta = cov_matrix[0, 1] / cov_matrix[1, 1]
+        var_index = cov_matrix[1, 1]
+        if var_index <= 0:
+            return None
+        beta = float(cov_matrix[0, 1] / var_index)
 
         if pd.isna(beta) or beta <= 0:
             return None
