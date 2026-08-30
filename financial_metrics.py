@@ -112,7 +112,7 @@ def determine_business_type(income_stmt, balance_sheet):
         if latest_debt_ratio > 60:
             types.append(f"高杠杆型（资产负债率{latest_debt_ratio:.1f}%）")
 
-    return "、".join(types) if types else "未分类"
+    return types if types else ["未分类"]
 
 
 # ====== 财务质量深度指标 ======
@@ -282,13 +282,13 @@ def build_financial_quality_table(income_stmt, balance_sheet, cash_flow):
     ca = annual_bs.get('流动资产合计')
     cl = annual_bs.get('流动负债合计')
     if ca is not None and cl is not None:
-        result['流动比率'] = ca.div(cl.replace(0, np.nan))
+        result['流动比率(倍)'] = ca.div(cl.replace(0, np.nan))
 
     # 速动比率
     inv = annual_bs.get('存货')
     if ca is not None and cl is not None:
         inv_val = inv if inv is not None else 0
-        result['速动比率'] = (ca - inv_val).div(cl.replace(0, np.nan))
+        result['速动比率(倍)'] = (ca - inv_val).div(cl.replace(0, np.nan))
 
     # 应收账款周转天数
     rev = annual_inc.get('营业总收入', annual_inc.get('营业收入'))
@@ -297,7 +297,7 @@ def build_financial_quality_table(income_stmt, balance_sheet, cash_flow):
         avg_ar = (ar + ar.shift(1)) / 2
         avg_ar = avg_ar.dropna()
         turnover = rev.reindex(avg_ar.index).div(avg_ar.replace(0, np.nan))
-        result['应收账款周转天数'] = 365 / turnover
+        result['应收账款周转天数(天)'] = 365 / turnover
 
     # 存货周转天数
     cost = annual_inc.get('营业总成本', annual_inc.get('营业成本'))
@@ -305,14 +305,14 @@ def build_financial_quality_table(income_stmt, balance_sheet, cash_flow):
         avg_inv = (inv + inv.shift(1)) / 2
         avg_inv = avg_inv.dropna()
         turnover = cost.reindex(avg_inv.index).div(avg_inv.replace(0, np.nan))
-        result['存货周转天数'] = 365 / turnover
+        result['存货周转天数(天)'] = 365 / turnover
 
     # 现金流/净利润比
     ocf = annual_cf.get('经营活动产生的现金流量净额')
     np_col = '归属于母公司所有者的净利润' if '归属于母公司所有者的净利润' in annual_inc.columns else '净利润'
     net_profit = annual_inc.get(np_col)
     if ocf is not None and net_profit is not None:
-        result['现金流/净利润'] = ocf.reindex(net_profit.index).div(net_profit.replace(0, np.nan))
+        result['现金流/净利润(倍)'] = ocf.reindex(net_profit.index).div(net_profit.replace(0, np.nan))
 
     # 商誉占净资产比
     gw = annual_bs.get('商誉')
@@ -388,13 +388,13 @@ def build_income_table(income_stmt, annual_only=True):
     revenue = df.get('营业总收入', df.get('营业收入'))
     cost = df.get('营业总成本', df.get('营业成本'))
     if revenue is not None and cost is not None:
-        result['毛利润'] = (revenue - cost) / 1e8
+        result['毛利润(亿元)'] = (revenue - cost) / 1e8
         result['毛利率(%)'] = (revenue - cost).div(revenue) * 100
 
     # 四费
     for col in ['销售费用', '管理费用', '财务费用', '研发费用']:
         if col in df.columns:
-            result[col] = df[col] / 1e8
+            result[f'{col}(亿元)'] = df[col] / 1e8
 
     # 费用占毛利润比率
     if revenue is not None and cost is not None:
@@ -421,9 +421,9 @@ def build_cashflow_table(cash_flow, annual_only=True):
     result = pd.DataFrame(index=df.index)
 
     col_map = {
-        '经营活动产生的现金流量净额': '经营现金流净额',
-        '投资活动产生的现金流量净额': '投资现金流净额',
-        '筹资活动产生的现金流量净额': '筹资现金流净额',
+        '经营活动产生的现金流量净额': '经营现金流净额(亿元)',
+        '投资活动产生的现金流量净额': '投资现金流净额(亿元)',
+        '筹资活动产生的现金流量净额': '筹资现金流净额(亿元)',
     }
 
     for orig, display in col_map.items():
@@ -549,3 +549,83 @@ def generate_annual_report_analysis(income_stmt, balance_sheet, cash_flow, marke
             analyses.append(("估值参考", val_text))
 
     return analyses
+
+
+def build_dupont_table(income_stmt, balance_sheet):
+    """
+    杜邦分析: ROE = 净利率 × 总资产周转率 × 权益乘数
+    返回: pd.DataFrame, 列 = [年度, 净利率(%), 总资产周转率(次), 权益乘数(倍), ROE(%)]
+    """
+    annual_inc = income_stmt[income_stmt.index.month == 12]
+    annual_bs = balance_sheet[balance_sheet.index.month == 12]
+
+    np_col = '归属于母公司所有者的净利润' if '归属于母公司所有者的净利润' in annual_inc.columns else '净利润'
+    rev_col = '营业总收入' if '营业总收入' in annual_inc.columns else '营业收入'
+
+    net_profit = annual_inc.get(np_col)
+    revenue = annual_inc.get(rev_col)
+    total_assets = annual_bs.get('资产总计')
+    eq_col = '归属于母公司股东权益合计' if '归属于母公司股东权益合计' in annual_bs.columns else None
+    equity = annual_bs.get(eq_col) if eq_col else None
+
+    if net_profit is None or revenue is None or total_assets is None or equity is None:
+        return pd.DataFrame()
+
+    common_idx = net_profit.dropna().index.intersection(revenue.dropna().index) \
+                               .intersection(total_assets.dropna().index) \
+                               .intersection(equity.dropna().index)
+    if len(common_idx) < 2:
+        return pd.DataFrame()
+
+    np_s = net_profit.reindex(common_idx)
+    rev_s = revenue.reindex(common_idx)
+    ta_s = total_assets.reindex(common_idx)
+    eq_s = equity.reindex(common_idx)
+
+    avg_ta = (ta_s + ta_s.shift(1)) / 2
+    avg_eq = (eq_s + eq_s.shift(1)) / 2
+    avg_ta = avg_ta.dropna()
+    avg_eq = avg_eq.dropna()
+    np_s = np_s.reindex(avg_ta.index)
+    rev_s = rev_s.reindex(avg_ta.index)
+    avg_eq = avg_eq.reindex(avg_ta.index)
+
+    net_margin = np_s.div(rev_s.replace(0, np.nan)) * 100
+    asset_turnover = rev_s.div(avg_ta.replace(0, np.nan))
+    equity_multiplier = avg_ta.div(avg_eq.replace(0, np.nan))
+    roe = np_s.div(avg_eq.replace(0, np.nan)) * 100
+
+    result = pd.DataFrame({
+        '净利率(%)': net_margin.round(2),
+        '总资产周转率(次)': asset_turnover.round(3),
+        '权益乘数(倍)': equity_multiplier.round(3),
+        'ROE(%)': roe.round(2),
+    }, index=avg_ta.index)
+
+    result.index.name = '年度'
+    return result
+
+
+def calculate_roe_decomposition_trend(income_stmt, balance_sheet, years=5):
+    """
+    计算ROE分解各因子的年度变化率，用于判断驱动因素
+    返回: dict with 'net_margin', 'asset_turnover', 'equity_multiplier', 'roe' 的变化趋势
+    """
+    dupont = build_dupont_table(income_stmt, balance_sheet)
+    if dupont.empty or len(dupont) < 2:
+        return None
+
+    latest = dupont.iloc[-1]
+    prev = dupont.iloc[-2]
+
+    return {
+        'latest': latest.to_dict(),
+        'prev': prev.to_dict(),
+        'changes': {
+            '净利率': latest['净利率(%)'] - prev['净利率(%)'],
+            '总资产周转率': latest['总资产周转率(次)'] - prev['总资产周转率(次)'],
+            '权益乘数': latest['权益乘数(倍)'] - prev['权益乘数(倍)'],
+            'ROE': latest['ROE(%)'] - prev['ROE(%)'],
+        },
+        'table': dupont.tail(years),
+    }

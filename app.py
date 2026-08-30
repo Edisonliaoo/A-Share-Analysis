@@ -28,8 +28,9 @@ from financial_metrics import (
     calculate_receivable_turnover_days, calculate_inventory_turnover_days,
     calculate_rd_ratio, build_financial_quality_table,
     calculate_actual_payout_ratio, build_dividend_table,
+    build_dupont_table, calculate_roe_decomposition_trend,
 )
-from valuation import dcf_valuation, ddm_valuation, pb_valuation, pe_valuation, calculate_wacc
+from valuation import dcf_valuation, ddm_valuation, pb_valuation, pe_valuation, calculate_wacc, dcf_sensitivity
 from visualizations import (
     plot_balance_sheet_bar,
     plot_roe_trend, plot_gross_margin_trend, plot_expense_ratio_trend,
@@ -44,17 +45,18 @@ from visualizations import (
     plot_growth_analysis, plot_rd_ratio_trend, plot_quarterly_growth,
     plot_dividend_trend, plot_risk_metrics,
     plot_radar_chart, plot_stock_comparison_bars,
+    plot_dupont_analysis, plot_dcf_sensitivity_heatmap,
 )
 
 # ========== 页面配置 ==========
 st.set_page_config(
     page_title="A股投资分析",
-    page_icon="📊",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("📊 A股投资分析系统")
+st.title("A股投资分析系统")
 st.markdown("---")
 
 # 初始化自选股列表
@@ -62,7 +64,7 @@ if 'watchlist' not in st.session_state:
     st.session_state['watchlist'] = []
 
 # ========== 侧边栏：股票搜索 ==========
-st.sidebar.header("🔍 股票搜索")
+st.sidebar.header("股票搜索")
 
 search_keyword = st.sidebar.text_input(
     "输入股票代码或名称",
@@ -101,7 +103,7 @@ if selected_stock:
         f"({selected_stock['exchange']}{selected_stock['code']})"
     )
 
-    if st.sidebar.button("📥 加载数据", type="primary"):
+    if st.sidebar.button("加载数据", type="primary"):
         st.session_state['selected_stock'] = selected_stock
         st.session_state['data_loaded'] = True
         st.rerun()
@@ -109,16 +111,16 @@ if selected_stock:
 # 显示自选股列表
 if st.session_state.get('watchlist'):
     st.sidebar.markdown("---")
-    st.sidebar.subheader("⭐ 自选股")
+    st.sidebar.subheader("自选股")
     for i, item in enumerate(st.session_state['watchlist']):
         col_w1, col_w2 = st.sidebar.columns([4, 1])
         with col_w1:
             st.sidebar.text(f"{item['name']} ({item['exchange']}{item['code']})")
         with col_w2:
-            if st.button("✕", key=f"remove_{i}", help="移除"):
+            if st.button("", key=f"remove_{i}", help="移除"):
                 st.session_state['watchlist'].pop(i)
                 st.rerun()
-    if st.sidebar.button("🗑️ 清空自选股"):
+    if st.sidebar.button("清空自选股"):
         st.session_state['watchlist'] = []
         st.rerun()
 
@@ -161,7 +163,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
     # 侧边栏显示实时行情
     if market_cap:
         st.sidebar.markdown("---")
-        st.sidebar.subheader("📈 实时行情")
+        st.sidebar.subheader("实时行情")
         st.sidebar.metric("当前股价", f"{market_cap['price']:.2f} 元")
         st.sidebar.metric("总市值", f"{market_cap['market_cap_yi']:.2f} 亿元")
         st.sidebar.metric("总股本", f"{market_cap['shares'] / 1e4:.2f} 万股")
@@ -169,7 +171,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
     # 侧边栏显示公司基本信息
     if company_info:
         st.sidebar.markdown("---")
-        st.sidebar.subheader("🏢 公司信息")
+        st.sidebar.subheader("公司信息")
         sidebar_fields = [
             ('SECURITY_NAME_ABBR', '股票简称'),
             ('EM2016', '行业'),
@@ -192,11 +194,11 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         'exchange': stock['exchange'],
     }
     if stock_item not in st.session_state['watchlist']:
-        if st.sidebar.button("⭐ 加入自选股"):
+        if st.sidebar.button("加入自选股"):
             st.session_state['watchlist'].append(stock_item)
             st.rerun()
     else:
-        st.sidebar.success("✅ 已在自选股列表中")
+        st.sidebar.success("已在自选股列表中")
 
     # ========== 加载行业对标数据 ==========
     industry_name_raw = company_info.get('EM2016', '') if company_info else ''
@@ -224,7 +226,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             industry_data = load_industry_data(industry_name_raw)
 
     # ========== 主内容区 ==========
-    tab1, tab2, tab3, tab4 = st.tabs(["🏢 公司财务分析", "💰 公司估值分析", "🏭 行业对标", "📊 多股对比"])
+    tab1, tab2, tab3, tab4 = st.tabs(["公司财务分析", "公司估值分析", "行业对标", "多股对比"])
 
     # ==================== Tab 1: 公司财务分析 ====================
     with tab1:
@@ -360,7 +362,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         st.header("2. 公司基本指标判断")
 
         # 图表1: 公司总营收与总市值走势
-        st.subheader("📈 公司总营收与总市值走势")
+        st.subheader("公司总营收与总市值走势")
         fig_rev_mc = plot_revenue_marketcap_trend(income_stmt, historical_mc)
         if fig_rev_mc:
             st.plotly_chart(fig_rev_mc, use_container_width=True)
@@ -368,7 +370,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.warning("暂无足够数据生成此图表")
 
         # 图表2: 净利润与经营现金流净额趋势
-        st.subheader("📈 净利润与经营现金流净额趋势")
+        st.subheader("净利润与经营现金流净额趋势")
         fig_npc = plot_net_profit_cashflow(income_stmt, cash_flow)
         if fig_npc:
             st.plotly_chart(fig_npc, use_container_width=True)
@@ -381,8 +383,8 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         st.header("3. 财务分析")
 
         # --- 资产负债表 ---
-        st.subheader("📊 资产负债表")
-        st.caption("🔵 蓝色 = 资产项 | 🔴 红色 = 负债项")
+        st.subheader("资产负债表")
+        st.caption("蓝色 = 资产项 | 红色 = 负债项")
         fig_bs = plot_balance_sheet_bar(balance_sheet, is_annual=True)
         if fig_bs:
             st.plotly_chart(fig_bs, use_container_width=True)
@@ -390,7 +392,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.warning("无法生成图表，请检查数据")
 
         # --- 利润表 ---
-        st.subheader("📊 利润表")
+        st.subheader("利润表")
 
         # 成本细节图表1: 毛利率 & 总营收 & 总营业成本
         st.markdown("**毛利率、总营收与总营业成本**")
@@ -412,7 +414,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         st.markdown("**利润表关键指标**")
         income_table = build_income_table(income_stmt, annual_only=True)
         if not income_table.empty:
-            st.dataframe(income_table.style.format("{:.2f}"), use_container_width=True)
+            st.dataframe(income_table.style.format("{:.2f}", na_rep="-"), use_container_width=True)
         else:
             st.info("暂无利润表数据")
 
@@ -420,7 +422,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         st.markdown("**现金流量表关键指标**")
         cf_table = build_cashflow_table(cash_flow, annual_only=True)
         if not cf_table.empty:
-            st.dataframe(cf_table.style.format("{:.2f}"), use_container_width=True)
+            st.dataframe(cf_table.style.format("{:.2f}", na_rep="-"), use_container_width=True)
         else:
             st.info("暂无现金流量表数据")
 
@@ -433,7 +435,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                               main_business.get('by_product') or
                               main_business.get('by_region')):
             # 按行业
-            st.subheader("📊 主营利润构成（按行业）")
+            st.subheader("主营利润构成（按行业）")
             fig_ind = plot_main_business_stacked(
                 main_business.get('by_industry', []),
                 'by_industry', '行业'
@@ -444,7 +446,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                 st.info("暂无按行业分类的主营构成数据")
 
             # 按产品
-            st.subheader("📊 主营利润构成（按产品）")
+            st.subheader("主营利润构成（按产品）")
             fig_prod = plot_main_business_stacked(
                 main_business.get('by_product', []),
                 'by_product', '产品'
@@ -455,7 +457,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                 st.info("暂无按产品分类的主营构成数据")
 
             # 按地区
-            st.subheader("📊 主营利润构成（按地区）")
+            st.subheader("主营利润构成（按地区）")
             fig_reg = plot_main_business_stacked(
                 main_business.get('by_region', []),
                 'by_region', '地区'
@@ -475,7 +477,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             income_stmt, balance_sheet, cash_flow, market_cap
         )
         for section, text in analyses:
-            st.subheader(f"📊 {section}")
+            st.subheader(f"{section}")
             st.write(text)
 
         st.markdown("---")
@@ -505,12 +507,42 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
 
         st.markdown("---")
 
+        # ======== 6.5 杜邦分析 ========
+        st.header("杜邦分析")
+        dupont_fig, waterfall_fig = plot_dupont_analysis(income_stmt, balance_sheet)
+        if dupont_fig:
+            st.plotly_chart(dupont_fig, use_container_width=True)
+
+            dupont_table = build_dupont_table(income_stmt, balance_sheet)
+            if not dupont_table.empty:
+                st.dataframe(
+                    dupont_table.style.format("{:.2f}", na_rep="-"),
+                    use_container_width=True,
+                )
+
+            if waterfall_fig:
+                st.plotly_chart(waterfall_fig, use_container_width=True)
+
+            trend = calculate_roe_decomposition_trend(income_stmt, balance_sheet)
+            if trend and 'changes' in trend:
+                changes = trend['changes']
+                max_driver = max(changes.items(), key=lambda x: abs(x[1]))
+                if abs(max_driver[1]) > 0.1:
+                    direction = "提升" if max_driver[1] > 0 else "拖累"
+                    st.info(
+                        f"ROE同比变动 {changes['ROE']:+.2f} 个百分点，"
+                        f"主要{direction}因素: {max_driver[0]} ({max_driver[1]:+.2f})"
+                    )
+        else:
+            st.info("数据不足，无法进行杜邦分析")
+
+        st.markdown("---")
+
         # ======== 7. 财务质量深度分析 ========
         st.header("7. 财务质量深度分析")
-        st.caption("评估公司财务健康度：偿债能力、运营效率、盈利含金量、暴雷风险")
 
         # 资产负债率趋势
-        st.subheader("📈 资产负债率趋势")
+        st.subheader("资产负债率趋势")
         fig_debt = plot_debt_ratio_trend(balance_sheet)
         if fig_debt:
             st.plotly_chart(fig_debt, use_container_width=True)
@@ -518,7 +550,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.warning("暂无足够数据")
 
         # 财务质量综合仪表板
-        st.subheader("📈 财务质量综合仪表板")
+        st.subheader("财务质量综合仪表板")
         fig_quality = plot_financial_quality_card(income_stmt, balance_sheet, cash_flow)
         if fig_quality:
             st.plotly_chart(fig_quality, use_container_width=True)
@@ -526,11 +558,11 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.warning("暂无足够数据")
 
         # 财务质量指标表
-        st.subheader("📊 财务质量指标表")
+        st.subheader("财务质量指标表")
         quality_table = build_financial_quality_table(income_stmt, balance_sheet, cash_flow)
         if not quality_table.empty:
             st.dataframe(
-                quality_table.style.format("{:.2f}"),
+                quality_table.style.format("{:.2f}", na_rep="-"),
                 use_container_width=True,
             )
             # 指标解读
@@ -540,33 +572,33 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             if '资产负债率(%)' in latest.index and pd.notna(latest['资产负债率(%)']):
                 dr = latest['资产负债率(%)']
                 if dr < 40:
-                    interpretations.append(f"✅ 资产负债率 {dr:.1f}%，财务结构稳健")
+                    interpretations.append(f"资产负债率 {dr:.1f}%，财务结构稳健")
                 elif dr < 60:
-                    interpretations.append(f"⚠️ 资产负债率 {dr:.1f}%，财务结构适中")
+                    interpretations.append(f"资产负债率 {dr:.1f}%，财务结构适中")
                 else:
-                    interpretations.append(f"🔴 资产负债率 {dr:.1f}%，负债率较高，需关注偿债能力")
-            if '流动比率' in latest.index and pd.notna(latest['流动比率']):
-                cr = latest['流动比率']
+                    interpretations.append(f"资产负债率 {dr:.1f}%，负债率较高，需关注偿债能力")
+            if '流动比率(倍)' in latest.index and pd.notna(latest['流动比率(倍)']):
+                cr = latest['流动比率(倍)']
                 if cr >= 2:
-                    interpretations.append(f"✅ 流动比率 {cr:.2f}，短期偿债能力强")
+                    interpretations.append(f"流动比率 {cr:.2f}，短期偿债能力强")
                 elif cr >= 1:
-                    interpretations.append(f"⚠️ 流动比率 {cr:.2f}，短期偿债能力一般")
+                    interpretations.append(f"流动比率 {cr:.2f}，短期偿债能力一般")
                 else:
-                    interpretations.append(f"🔴 流动比率 {cr:.2f}，短期偿债能力不足")
-            if '现金流/净利润' in latest.index and pd.notna(latest['现金流/净利润']):
-                cr = latest['现金流/净利润']
+                    interpretations.append(f"流动比率 {cr:.2f}，短期偿债能力不足")
+            if '现金流/净利润(倍)' in latest.index and pd.notna(latest['现金流/净利润(倍)']):
+                cr = latest['现金流/净利润(倍)']
                 if cr >= 1:
-                    interpretations.append(f"✅ 现金流/净利润 {cr:.2f}，盈利含金量高")
+                    interpretations.append(f"现金流/净利润 {cr:.2f}，盈利含金量高")
                 elif cr >= 0.5:
-                    interpretations.append(f"⚠️ 现金流/净利润 {cr:.2f}，盈利含金量一般")
+                    interpretations.append(f"现金流/净利润 {cr:.2f}，盈利含金量一般")
                 else:
-                    interpretations.append(f"🔴 现金流/净利润 {cr:.2f}，盈利含金量低，需警惕")
+                    interpretations.append(f"现金流/净利润 {cr:.2f}，盈利含金量低，需警惕")
             if '商誉/净资产(%)' in latest.index and pd.notna(latest['商誉/净资产(%)']):
                 gr = latest['商誉/净资产(%)']
                 if gr > 30:
-                    interpretations.append(f"🔴 商誉占净资产 {gr:.1f}%，商誉减值风险较高")
+                    interpretations.append(f"商誉占净资产 {gr:.1f}%，商誉减值风险较高")
                 elif gr > 10:
-                    interpretations.append(f"⚠️ 商誉占净资产 {gr:.1f}%，需关注减值风险")
+                    interpretations.append(f"商誉占净资产 {gr:.1f}%，需关注减值风险")
             for interp in interpretations:
                 st.markdown(f"- {interp}")
         else:
@@ -606,7 +638,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                 st.metric("净利润同比增速", "N/A")
 
         # 营收与净利润成长趋势
-        st.subheader("📈 营收与净利润成长趋势")
+        st.subheader("营收与净利润成长趋势")
         fig_growth = plot_growth_analysis(income_stmt)
         if fig_growth:
             st.plotly_chart(fig_growth, use_container_width=True)
@@ -614,7 +646,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.warning("暂无足够数据")
 
         # 季度营收增长趋势
-        st.subheader("📈 季度营收增长趋势")
+        st.subheader("季度营收增长趋势")
         fig_qg = plot_quarterly_growth(income_stmt)
         if fig_qg:
             st.plotly_chart(fig_qg, use_container_width=True)
@@ -622,7 +654,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.warning("暂无足够数据生成季度增长图")
 
         # 研发投入占比趋势
-        st.subheader("📈 研发投入占比趋势")
+        st.subheader("研发投入占比趋势")
         fig_rd = plot_rd_ratio_trend(income_stmt)
         if fig_rd:
             st.plotly_chart(fig_rd, use_container_width=True)
@@ -633,8 +665,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
 
         # ======== 9. 管理层与股东分析 ========
         st.header("9. 管理层与股东分析")
-        st.caption("十大股东、股东人数变化、高管增减持")
-
+    
         @st.cache_data(ttl=3600, show_spinner=False)
         def fetch_shareholders(code):
             return get_top_shareholders(code)
@@ -652,7 +683,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         insider_deals = fetch_insider(stock['code'])
 
         # 十大股东
-        st.subheader("📊 十大股东（最新）")
+        st.subheader("十大股东（最新）")
         if shareholders:
             sh_df = pd.DataFrame(shareholders)
             sh_df.columns = ['股东名称', '持股比例(%)', '增减变化', '股东类型', '报告期']
@@ -661,7 +692,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.info("暂无十大股东数据")
 
         # 股东人数变化
-        st.subheader("📊 股东人数变化")
+        st.subheader("股东人数变化")
         if holder_counts:
             hc_df = pd.DataFrame(holder_counts)
             hc_df.columns = ['报告期', '股东人数', '人均持股', '变化比例(%)']
@@ -670,7 +701,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                     '股东人数': '{:,.0f}',
                     '人均持股': '{:,.0f}',
                     '变化比例(%)': '{:.2f}',
-                }),
+                }, na_rep="-"),
                 use_container_width=True,
                 hide_index=True,
             )
@@ -678,7 +709,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.info("暂无股东人数数据")
 
         # 高管增减持
-        st.subheader("📊 高管增减持")
+        st.subheader("高管增减持")
         if insider_deals:
             id_df = pd.DataFrame(insider_deals)
             id_df.columns = ['变动人', '变动日期', '变动股数', '变动比例(%)', '均价', '变动后持股', '与公司关系']
@@ -688,7 +719,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                     '变动比例(%)': '{:.2f}',
                     '均价': '{:.2f}',
                     '变动后持股': '{:,.0f}',
-                }),
+                }, na_rep="-"),
                 use_container_width=True,
                 hide_index=True,
             )
@@ -697,7 +728,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
 
     # ==================== Tab 2: 公司估值分析 ====================
     with tab2:
-        st.header("💰 公司估值分析")
+        st.header("公司估值分析")
 
         # 当前股价/市值输入
         st.subheader("当前股价与市值")
@@ -729,7 +760,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         st.header("相对估值法")
 
         # --- P/B 估值 ---
-        st.subheader("📈 P/B 市净率估值")
+        st.subheader("P/B 市净率估值")
         pb_result = pb_valuation(
             annual_bs, market_cap=mc_yuan,
             current_price=current_price if current_price > 0 else None,
@@ -750,7 +781,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.warning("无法计算P/B估值")
 
         # --- P/E 估值 ---
-        st.subheader("📈 P/E 市盈率估值")
+        st.subheader("P/E 市盈率估值")
         pe_result = pe_valuation(
             annual_inc,
             current_price=current_price if current_price > 0 else None,
@@ -786,9 +817,6 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         # ======== 绝对估值法 ========
         st.header("绝对估值法")
 
-        # 估值参数设置
-        st.subheader("估值参数设置")
-
         # WACC自动计算
         wacc_data = None
         mc_for_wacc = mc_yuan
@@ -796,27 +824,6 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             mc_for_wacc = market_cap['market_cap_yi'] * 1e8
         if beta is not None and risk_free_rate is not None and mc_for_wacc:
             wacc_data = calculate_wacc(annual_bs, annual_inc, mc_for_wacc, beta, risk_free_rate)
-
-        col_p1, col_p2, col_p3, col_p4 = st.columns(4)
-        with col_p1:
-            dcf_growth = st.slider("DCF - 未来增长率 (%)", 0, 30, 10) / 100
-        with col_p2:
-            dcf_terminal = st.slider("DCF - 永续增长率 (%)", 0, 8, 3) / 100
-        with col_p3:
-            if wacc_data:
-                default_wacc = max(3, min(25, int(round(wacc_data['wacc'] * 100))))
-                dcf_discount = st.slider(
-                    "DCF - 折现率/WACC (%)", 3, 25,
-                    value=default_wacc,
-                    help=f"自动计算WACC: {wacc_data['wacc']*100:.2f}%"
-                ) / 100
-            else:
-                dcf_discount = st.slider("DCF - 折现率 (%)", 5, 20, 10) / 100
-        with col_p4:
-            dcf_years = st.slider("DCF - 预测年数", 3, 10, 5)
-
-        ddm_growth = st.slider("DDM - 股利增长率 (%)", 0, 15, 5) / 100
-        ddm_discount = st.slider("DDM - 折现率 (%)", 5, 15, 8) / 100
 
         # WACC明细
         if wacc_data:
@@ -839,8 +846,8 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
 
         st.markdown("---")
 
-        # --- DCF 估值 ---
-        st.subheader("📈 DCF 现金流折现模型")
+        # ======== DCF 估值（参数+结果一体）========
+        st.subheader("DCF 现金流折现模型")
 
         # 检测金融类公司（银行/保险/证券），FCF模型不适用
         industry_str = ''
@@ -850,11 +857,32 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
 
         if is_financial:
             st.warning(
-                "⚠️ 该公司属于金融行业（银行/保险/证券），DCF现金流模型不适用。"
+                "该公司属于金融行业（银行/保险/证券），DCF现金流模型不适用。"
                 "金融类公司的\"经营现金流\"包含存贷款变动，无法反映真实自由现金流。"
                 "建议参考下方 **DDM股利折现模型** 和 **P/B市净率估值**。"
             )
         else:
+            # DCF 参数滑块
+            st.markdown("**DCF 参数设置**")
+            col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+            with col_p1:
+                dcf_growth = st.slider("未来增长率 (%)", 0, 30, 10, key="dcf_growth") / 100
+            with col_p2:
+                dcf_terminal = st.slider("永续增长率 (%)", 0, 8, 3, key="dcf_terminal") / 100
+            with col_p3:
+                if wacc_data and wacc_data.get('wacc') is not None and not pd.isna(wacc_data.get('wacc')):
+                    default_wacc = max(3, min(25, int(round(wacc_data['wacc'] * 100))))
+                    dcf_discount = st.slider("折现率/WACC (%)", 3, 25,
+                        value=default_wacc,
+                        help=f"自动计算WACC: {wacc_data['wacc']*100:.2f}%",
+                        key="dcf_discount") / 100
+                else:
+                    dcf_discount = st.slider("折现率 (%)", 5, 20, 10, key="dcf_discount") / 100
+            with col_p4:
+                dcf_years = st.slider("预测年数", 3, 10, 5, key="dcf_years")
+
+            st.markdown("---")
+
             dcf_result = dcf_valuation(
                 annual_cf, annual_inc, annual_bs,
                 growth_rate=dcf_growth, terminal_growth=dcf_terminal,
@@ -888,7 +916,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                             '预测FCF(亿)': '{:.2f}',
                             '折现因子': '{:.4f}',
                             '折现后FCF(亿)': '{:.2f}',
-                        }),
+                        }, na_rep="-"),
                         use_container_width=True, hide_index=True,
                     )
                     st.write(f"**终值**: {dcf_result['terminal_value'] / 1e8:.2f} 亿元")
@@ -904,7 +932,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                     )
                     if ratio > 3:
                         st.warning(
-                            f"⚠️ DCF估值是当前股价的 {ratio:.1f} 倍，偏差较大，"
+                            f"DCF估值是当前股价的 {ratio:.1f} 倍，偏差较大，"
                             "可能原因：① 增长率假设过高 ② 近年FCF异常偏高 ③ 公司处于周期高点。"
                             "建议调低增长率或折现率后重新评估。"
                         )
@@ -916,13 +944,57 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             else:
                 st.warning("无法计算DCF估值，请检查数据")
 
+            # DCF敏感性分析
+            if not is_financial:
+                st.markdown("**DCF敏感性分析**")
+                st.caption("不同增长率与折现率组合下的每股估值（元）")
+                sens_data = dcf_sensitivity(
+                    cash_flow, income_stmt, balance_sheet,
+                    terminal_growth=dcf_terminal,
+                    forecast_years=dcf_years,
+                    shares=dcf_result.get('shares') if dcf_result else None,
+                )
+                if sens_data and not sens_data['matrix'].empty:
+                    fig_sens = plot_dcf_sensitivity_heatmap(sens_data, current_price)
+                    if fig_sens:
+                        st.plotly_chart(fig_sens, use_container_width=True)
+
+                    st.write("**估值区间分布**")
+                    matrix = sens_data['matrix']
+                    all_vals = matrix.values.flatten()
+                    all_vals = all_vals[~np.isnan(all_vals)]
+                    if len(all_vals) > 0:
+                        col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+                        with col_s1:
+                            st.metric("最低估值", f"{np.min(all_vals):.2f} 元")
+                        with col_s2:
+                            st.metric("最高估值", f"{np.max(all_vals):.2f} 元")
+                        with col_s3:
+                            st.metric("中位数", f"{np.median(all_vals):.2f} 元")
+                        with col_s4:
+                            if current_price > 0:
+                                below = np.sum(all_vals < current_price) / len(all_vals) * 100
+                                st.metric("低于现价比例", f"{below:.0f}%")
+                            else:
+                                st.metric("平均值", f"{np.mean(all_vals):.2f} 元")
+
         st.markdown("---")
 
-        # --- DDM 估值 ---
-        st.subheader("📈 DDM 股利折现模型")
+        # ======== DDM 估值（参数+结果一体）========
+        st.subheader("DDM 股利折现模型")
 
         # 计算实际派息率
         actual_payout = calculate_actual_payout_ratio(cash_flow, income_stmt)
+
+        # DDM 参数滑块
+        st.markdown("**DDM 参数设置**")
+        col_dp1, col_dp2 = st.columns(2)
+        with col_dp1:
+            ddm_growth = st.slider("股利增长率 (%)", 0, 15, 5, key="ddm_growth") / 100
+        with col_dp2:
+            ddm_discount = st.slider("折现率 (%)", 5, 15, 8, key="ddm_discount") / 100
+
+        st.markdown("---")
 
         ddm_result = ddm_valuation(
             annual_inc, annual_bs,
@@ -947,7 +1019,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                     proj_df.style.format({
                         '预测股利(亿)': '{:.2f}',
                         '折现后(亿)': '{:.2f}',
-                    }),
+                    }, na_rep="-"),
                     use_container_width=True, hide_index=True,
                 )
                 st.write(f"**假设分红率**: {ddm_result['payout_ratio'] * 100:.0f}%")
@@ -958,9 +1030,8 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         st.markdown("---")
 
         # ======== 股息分析 ========
-        st.header("📊 股息分析")
-        st.caption("实际分红历史、股息率与派息率趋势")
-
+        st.header("股息分析")
+    
         if dividend_history:
             # 分红趋势图
             fig_div = plot_dividend_trend(dividend_history, market_cap['price'] if market_cap else None)
@@ -972,7 +1043,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             if not div_table.empty:
                 st.markdown("**分红历史明细**")
                 st.dataframe(
-                    div_table.style.format("{:.4f}"),
+                    div_table.style.format("{:.4f}", na_rep="-"),
                     use_container_width=True,
                 )
 
@@ -984,7 +1055,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                     pd.DataFrame({
                         '年度': [str(d.year) for d in actual_payout.index],
                         '派息率(%)': actual_payout.values * 100,
-                    }).set_index('年度').style.format("{:.1f}"),
+                    }).set_index('年度').style.format("{:.1f}", na_rep="-"),
                     use_container_width=True,
                 )
         else:
@@ -993,7 +1064,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         st.markdown("---")
 
         # ======== 风险指标 ========
-        st.header("📊 风险指标分析")
+        st.header("风险指标分析")
         st.caption("Beta、年化波动率、最大回撤、Sharpe比率 (基于近3年日频数据)")
 
         if risk_metrics:
@@ -1022,30 +1093,30 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             risk_interpretations = []
             if beta_val:
                 if beta_val < 0.8:
-                    risk_interpretations.append(f"✅ Beta {beta_val:.2f}，波动低于大盘，防守型")
+                    risk_interpretations.append(f"Beta {beta_val:.2f}，波动低于大盘，防守型")
                 elif beta_val < 1.2:
-                    risk_interpretations.append(f"⚠️ Beta {beta_val:.2f}，与大盘波动基本一致")
+                    risk_interpretations.append(f"Beta {beta_val:.2f}，与大盘波动基本一致")
                 else:
-                    risk_interpretations.append(f"🔴 Beta {beta_val:.2f}，波动高于大盘，进攻型")
+                    risk_interpretations.append(f"Beta {beta_val:.2f}，波动高于大盘，进攻型")
             if vol < 20:
-                risk_interpretations.append(f"✅ 年化波动率 {vol:.1f}%，低波动")
+                risk_interpretations.append(f"年化波动率 {vol:.1f}%，低波动")
             elif vol < 40:
-                risk_interpretations.append(f"⚠️ 年化波动率 {vol:.1f}%，中等波动")
+                risk_interpretations.append(f"年化波动率 {vol:.1f}%，中等波动")
             else:
-                risk_interpretations.append(f"🔴 年化波动率 {vol:.1f}%，高波动")
+                risk_interpretations.append(f"年化波动率 {vol:.1f}%，高波动")
             if mdd > -40:
-                risk_interpretations.append(f"✅ 最大回撤 {mdd:.1f}%，回撤可控")
+                risk_interpretations.append(f"最大回撤 {mdd:.1f}%，回撤可控")
             elif mdd > -60:
-                risk_interpretations.append(f"⚠️ 最大回撤 {mdd:.1f}%，回撤较大")
+                risk_interpretations.append(f"最大回撤 {mdd:.1f}%，回撤较大")
             else:
-                risk_interpretations.append(f"🔴 最大回撤 {mdd:.1f}%，回撤严重")
+                risk_interpretations.append(f"最大回撤 {mdd:.1f}%，回撤严重")
             if sharpe_val is not None:
                 if sharpe_val > 1:
-                    risk_interpretations.append(f"✅ Sharpe {sharpe_val:.2f}，风险调整后收益优秀")
+                    risk_interpretations.append(f"Sharpe {sharpe_val:.2f}，风险调整后收益优秀")
                 elif sharpe_val > 0:
-                    risk_interpretations.append(f"⚠️ Sharpe {sharpe_val:.2f}，收益略高于无风险利率")
+                    risk_interpretations.append(f"Sharpe {sharpe_val:.2f}，收益略高于无风险利率")
                 else:
-                    risk_interpretations.append(f"🔴 Sharpe {sharpe_val:.2f}，跑输无风险利率")
+                    risk_interpretations.append(f"Sharpe {sharpe_val:.2f}，跑输无风险利率")
             for interp in risk_interpretations:
                 st.markdown(f"- {interp}")
         else:
@@ -1054,9 +1125,8 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         st.markdown("---")
 
         # ======== 研报/机构观点 ========
-        st.header("📊 机构一致预期")
-        st.caption("机构预测EPS、营收、目标价汇总")
-
+        st.header("机构一致预期")
+    
         @st.cache_data(ttl=3600, show_spinner=False)
         def fetch_consensus(code):
             return get_analyst_consensus(code)
@@ -1074,7 +1144,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                     '预测PE': '{:.1f}',
                     '机构数': '{:.0f}',
                     '目标价': '{:.2f}',
-                }),
+                }, na_rep="-"),
                 use_container_width=True,
                 hide_index=True,
             )
@@ -1101,7 +1171,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         st.markdown("---")
 
         # ======== 导出功能 ========
-        st.header("📥 导出分析数据")
+        st.header("导出分析数据")
         @st.cache_data(ttl=300, show_spinner=False)
         def build_export_data(code, exchange):
             """构建导出用的Excel数据"""
@@ -1138,7 +1208,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
         try:
             excel_data = build_export_data(stock['code'], stock['exchange'])
             st.download_button(
-                "📥 导出 Excel",
+                "导出 Excel",
                 data=excel_data,
                 file_name=f"{stock['name']}_{stock['code']}_分析数据.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1147,228 +1217,230 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
             st.warning("导出数据时出错")
 
         st.markdown("---")
-        st.caption("⚠️ 免责声明: 本工具仅用于学习和研究目的，所有估值结果仅供参考，不构成投资建议。")
+        st.caption("免责声明: 本工具仅用于学习和研究目的，所有估值结果仅供参考，不构成投资建议。")
 
     # ==================== Tab 3: 行业对标 ====================
     with tab3:
-        st.header("🏭 行业对标分析")
+        st.header("行业对标分析")
 
+        _tab3_ok = True
         if not industry_data:
             st.warning(f"无法获取行业「{industry_name_raw}」的板块数据，可能该行业分类无对应板块")
-            st.stop()
+            _tab3_ok = False
 
-        board_name = industry_data['board_name']
-        peers = industry_data['peers']
-        idx_data = industry_data['index_data']
-        pe_history = industry_data['pe_history']
+        if _tab3_ok:
+            board_name = industry_data['board_name']
+            peers = industry_data['peers']
+            idx_data = industry_data['index_data']
+            pe_history = industry_data['pe_history']
 
-        if peers is None or peers.empty:
-            st.warning("无法获取同行业公司数据")
-            st.stop()
+            if peers is None or peers.empty:
+                st.warning("无法获取同行业公司数据")
+                _tab3_ok = False
 
-        stock_code = stock['code']
-        stock_name = stock['name']
-        stock_in_peers = peers[peers['code'] == stock_code]
+        if _tab3_ok:
+            stock_code = stock['code']
+            stock_name = stock['name']
+            stock_in_peers = peers[peers['code'] == stock_code]
 
-        # ======== 1. 行业概况 ========
-        st.subheader("1. 行业概况")
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("所属行业板块", board_name)
-        with col2:
-            st.metric("同业公司数", f"{len(peers)} 家")
-        with col3:
-            st.metric("行业总市值", f"{peers['market_cap_yi'].sum():.0f} 亿元")
-        with col4:
-            if not stock_in_peers.empty:
-                mc_rank = (peers['market_cap_yi'] > float(stock_in_peers.iloc[0]['market_cap_yi'])).sum() + 1
-                st.metric("个股市值排名", f"第 {mc_rank} / {len(peers)}")
+            # ======== 1. 行业概况 ========
+            st.subheader("1. 行业概况")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("所属行业板块", board_name)
+            with col2:
+                st.metric("同业公司数", f"{len(peers)} 家")
+            with col3:
+                st.metric("行业总市值", f"{peers['market_cap_yi'].sum():.0f} 亿元")
+            with col4:
+                if not stock_in_peers.empty:
+                    mc_rank = (peers['market_cap_yi'] > float(stock_in_peers.iloc[0]['market_cap_yi'])).sum() + 1
+                    st.metric("个股市值排名", f"第 {mc_rank} / {len(peers)}")
+                else:
+                    st.metric("个股市值排名", "N/A")
+
+            st.markdown("---")
+
+            # ======== 2. 行业市盈率趋势 ========
+            st.subheader("2. 行业市盈率趋势")
+            st.caption("基于行业指数价格与当前加权P/E推算，近似反映行业估值变化趋势")
+
+            if pe_history is not None and not pe_history.empty:
+                stock_pe = None
+                if not stock_in_peers.empty and float(stock_in_peers.iloc[0]['pe']) > 0:
+                    stock_pe = float(stock_in_peers.iloc[0]['pe'])
+
+                fig_pe = plot_industry_pe_trend(pe_history, stock_pe, stock_name)
+                if fig_pe:
+                    st.plotly_chart(fig_pe, use_container_width=True)
+
+                current_pe = pe_history['pe'].iloc[-1]
+                pe_mean = pe_history['pe'].mean()
+                pe_percentile = (pe_history['pe'] < current_pe).sum() / len(pe_history) * 100
+
+                col_m1, col_m2, col_m3 = st.columns(3)
+                with col_m1:
+                    st.metric("行业当前P/E", f"{current_pe:.2f}")
+                with col_m2:
+                    st.metric("10年平均P/E", f"{pe_mean:.2f}")
+                with col_m3:
+                    st.metric("当前历史分位", f"{pe_percentile:.0f}%")
+
+                if pe_percentile < 25:
+                    st.success("行业估值处于历史低位")
+                elif pe_percentile > 75:
+                    st.warning("行业估值处于历史高位")
+                else:
+                    st.info("行业估值处于历史中等水平")
             else:
-                st.metric("个股市值排名", "N/A")
+                st.warning("暂无足够数据生成行业P/E趋势图")
 
-        st.markdown("---")
+            st.markdown("---")
 
-        # ======== 2. 行业市盈率趋势 ========
-        st.subheader("2. 行业市盈率趋势")
-        st.caption("基于行业指数价格与当前加权P/E推算，近似反映行业估值变化趋势")
-
-        if pe_history is not None and not pe_history.empty:
-            stock_pe = None
-            if not stock_in_peers.empty and float(stock_in_peers.iloc[0]['pe']) > 0:
-                stock_pe = float(stock_in_peers.iloc[0]['pe'])
-
-            fig_pe = plot_industry_pe_trend(pe_history, stock_pe, stock_name)
-            if fig_pe:
-                st.plotly_chart(fig_pe, use_container_width=True)
-
-            current_pe = pe_history['pe'].iloc[-1]
-            pe_mean = pe_history['pe'].mean()
-            pe_percentile = (pe_history['pe'] < current_pe).sum() / len(pe_history) * 100
-
-            col_m1, col_m2, col_m3 = st.columns(3)
-            with col_m1:
-                st.metric("行业当前P/E", f"{current_pe:.2f}")
-            with col_m2:
-                st.metric("10年平均P/E", f"{pe_mean:.2f}")
-            with col_m3:
-                st.metric("当前历史分位", f"{pe_percentile:.0f}%")
-
-            if pe_percentile < 25:
-                st.success("行业估值处于历史低位")
-            elif pe_percentile > 75:
-                st.warning("行业估值处于历史高位")
+            # ======== 3. 行业指数走势 ========
+            st.subheader("3. 行业指数走势")
+            if idx_data is not None and not idx_data.empty:
+                fig_idx = plot_industry_marketcap_trend(idx_data, board_name)
+                if fig_idx:
+                    st.plotly_chart(fig_idx, use_container_width=True)
             else:
-                st.info("行业估值处于历史中等水平")
-        else:
-            st.warning("暂无足够数据生成行业P/E趋势图")
+                st.warning("暂无行业指数数据")
 
-        st.markdown("---")
+            st.markdown("---")
 
-        # ======== 3. 行业指数走势 ========
-        st.subheader("3. 行业指数走势")
-        if idx_data is not None and not idx_data.empty:
-            fig_idx = plot_industry_marketcap_trend(idx_data, board_name)
-            if fig_idx:
-                st.plotly_chart(fig_idx, use_container_width=True)
-        else:
-            st.warning("暂无行业指数数据")
+            # ======== 4. 行业估值分布 ========
+            st.subheader("4. 行业估值分布")
+            col_pe, col_pb = st.columns(2)
+            with col_pe:
+                fig_dist_pe = plot_industry_pe_distribution(peers, stock_code, stock_name, 'pe')
+                if fig_dist_pe:
+                    st.plotly_chart(fig_dist_pe, use_container_width=True)
+                else:
+                    st.warning("暂无P/E分布数据")
+            with col_pb:
+                fig_dist_pb = plot_industry_pe_distribution(peers, stock_code, stock_name, 'pb')
+                if fig_dist_pb:
+                    st.plotly_chart(fig_dist_pb, use_container_width=True)
+                else:
+                    st.warning("暂无P/B分布数据")
 
-        st.markdown("---")
+            st.markdown("---")
 
-        # ======== 4. 行业估值分布 ========
-        st.subheader("4. 行业估值分布")
-        col_pe, col_pb = st.columns(2)
-        with col_pe:
-            fig_dist_pe = plot_industry_pe_distribution(peers, stock_code, stock_name, 'pe')
-            if fig_dist_pe:
-                st.plotly_chart(fig_dist_pe, use_container_width=True)
-            else:
-                st.warning("暂无P/E分布数据")
-        with col_pb:
-            fig_dist_pb = plot_industry_pe_distribution(peers, stock_code, stock_name, 'pb')
-            if fig_dist_pb:
-                st.plotly_chart(fig_dist_pb, use_container_width=True)
-            else:
-                st.warning("暂无P/B分布数据")
+            # ======== 5. 同业估值对比 ========
+            st.subheader("5. 同业估值对比")
+            col_bars1, col_bars2, col_bars3 = st.columns(3)
+            with col_bars1:
+                fig_bars_pe = plot_industry_peer_bars(peers, stock_code, stock_name, 'pe', top_n=15)
+                if fig_bars_pe:
+                    st.plotly_chart(fig_bars_pe, use_container_width=True)
+            with col_bars2:
+                fig_bars_pb = plot_industry_peer_bars(peers, stock_code, stock_name, 'pb', top_n=15)
+                if fig_bars_pb:
+                    st.plotly_chart(fig_bars_pb, use_container_width=True)
+            with col_bars3:
+                fig_bars_roe = plot_industry_peer_bars(peers, stock_code, stock_name, 'roe', top_n=15)
+                if fig_bars_roe:
+                    st.plotly_chart(fig_bars_roe, use_container_width=True)
 
-        st.markdown("---")
+            st.markdown("---")
 
-        # ======== 5. 同业估值对比 ========
-        st.subheader("5. 同业估值对比")
-        col_bars1, col_bars2, col_bars3 = st.columns(3)
-        with col_bars1:
-            fig_bars_pe = plot_industry_peer_bars(peers, stock_code, stock_name, 'pe', top_n=15)
-            if fig_bars_pe:
-                st.plotly_chart(fig_bars_pe, use_container_width=True)
-        with col_bars2:
-            fig_bars_pb = plot_industry_peer_bars(peers, stock_code, stock_name, 'pb', top_n=15)
-            if fig_bars_pb:
-                st.plotly_chart(fig_bars_pb, use_container_width=True)
-        with col_bars3:
-            fig_bars_roe = plot_industry_peer_bars(peers, stock_code, stock_name, 'roe', top_n=15)
-            if fig_bars_roe:
-                st.plotly_chart(fig_bars_roe, use_container_width=True)
+            # ======== 6. 同业对比表 ========
+            st.subheader("6. 同业对比表")
+            display_df = peers.copy()
+            display_df.columns = [
+                '代码', '名称', '最新价', '涨跌幅(%)', 'PE(动态)', 'PB', 'ROE(%)',
+                '总市值(亿)', '流通市值(亿)', '换手率(%)',
+            ]
+            display_df = display_df.sort_values('总市值(亿)', ascending=False)
+            st.dataframe(
+                display_df.style.format({
+                    '最新价': '{:.2f}',
+                    '涨跌幅(%)': '{:.2f}',
+                    'PE(动态)': '{:.1f}',
+                    'PB': '{:.2f}',
+                    'ROE(%)': '{:.2f}',
+                    '总市值(亿)': '{:.1f}',
+                    '流通市值(亿)': '{:.1f}',
+                    '换手率(%)': '{:.2f}',
+                }, na_rep="-"),
+                use_container_width=True,
+                hide_index=True,
+            )
 
-        st.markdown("---")
-
-        # ======== 6. 同业对比表 ========
-        st.subheader("6. 同业对比表")
-        display_df = peers.copy()
-        display_df.columns = [
-            '代码', '名称', '最新价', '涨跌幅(%)', 'PE(动态)', 'PB', 'ROE(%)',
-            '总市值(亿)', '流通市值(亿)', '换手率(%)',
-        ]
-        display_df = display_df.sort_values('总市值(亿)', ascending=False)
-        st.dataframe(
-            display_df.style.format({
-                '最新价': '{:.2f}',
-                '涨跌幅(%)': '{:.2f}',
-                'PE(动态)': '{:.1f}',
-                'PB': '{:.2f}',
-                'ROE(%)': '{:.2f}',
-                '总市值(亿)': '{:.1f}',
-                '流通市值(亿)': '{:.1f}',
-                '换手率(%)': '{:.2f}',
-            }),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        # 行业平均指标
-        st.markdown("**行业平均指标**")
-        valid_pe = peers[peers['pe'] > 0]
-        valid_pb = peers[peers['pb'] > 0]
-        valid_roe = peers[peers['roe'] > 0]
-        avg_cols = st.columns(4)
-        with avg_cols[0]:
-            st.metric("行业平均PE", f"{valid_pe['pe'].mean():.1f}" if not valid_pe.empty else "N/A")
-        with avg_cols[1]:
-            st.metric("行业平均PB", f"{valid_pb['pb'].mean():.2f}" if not valid_pb.empty else "N/A")
-        with avg_cols[2]:
-            st.metric("行业平均ROE", f"{valid_roe['roe'].mean():.2f}%" if not valid_roe.empty else "N/A")
-        with avg_cols[3]:
-            st.metric("行业总市值", f"{peers['market_cap_yi'].sum():.0f} 亿元")
-
-        st.markdown("---")
-
-        # ======== 7. 个股行业排名 ========
-        st.subheader("7. 个股行业排名")
-
-        if not stock_in_peers.empty:
-            stock_row = stock_in_peers.iloc[0]
-
+            # 行业平均指标
+            st.markdown("**行业平均指标**")
             valid_pe = peers[peers['pe'] > 0]
             valid_pb = peers[peers['pb'] > 0]
             valid_roe = peers[peers['roe'] > 0]
+            avg_cols = st.columns(4)
+            with avg_cols[0]:
+                st.metric("行业平均PE", f"{valid_pe['pe'].mean():.1f}" if not valid_pe.empty else "N/A")
+            with avg_cols[1]:
+                st.metric("行业平均PB", f"{valid_pb['pb'].mean():.2f}" if not valid_pb.empty else "N/A")
+            with avg_cols[2]:
+                st.metric("行业平均ROE", f"{valid_roe['roe'].mean():.2f}%" if not valid_roe.empty else "N/A")
+            with avg_cols[3]:
+                st.metric("行业总市值", f"{peers['market_cap_yi'].sum():.0f} 亿元")
 
-            rank_cols = st.columns(4)
-            with rank_cols[0]:
-                if stock_row['pe'] > 0 and not valid_pe.empty:
-                    pe_rank = int((valid_pe['pe'] < stock_row['pe']).sum()) + 1
-                    st.metric("P/E 排名", f"第 {pe_rank} / {len(valid_pe)}",
-                              f"当前: {stock_row['pe']:.1f}")
-                else:
-                    st.metric("P/E 排名", "N/A")
+            st.markdown("---")
 
-            with rank_cols[1]:
-                if stock_row['pb'] > 0 and not valid_pb.empty:
-                    pb_rank = int((valid_pb['pb'] < stock_row['pb']).sum()) + 1
-                    st.metric("P/B 排名", f"第 {pb_rank} / {len(valid_pb)}",
-                              f"当前: {stock_row['pb']:.2f}")
-                else:
-                    st.metric("P/B 排名", "N/A")
+            # ======== 7. 个股行业排名 ========
+            st.subheader("7. 个股行业排名")
 
-            with rank_cols[2]:
-                if stock_row['roe'] > 0 and not valid_roe.empty:
-                    roe_rank = int((valid_roe['roe'] > stock_row['roe']).sum()) + 1
-                    st.metric("ROE 排名", f"第 {roe_rank} / {len(valid_roe)}",
-                              f"当前: {stock_row['roe']:.2f}%")
-                else:
-                    st.metric("ROE 排名", "N/A")
+            if not stock_in_peers.empty:
+                stock_row = stock_in_peers.iloc[0]
 
-            with rank_cols[3]:
-                mc_rank = int((peers['market_cap_yi'] > stock_row['market_cap_yi']).sum()) + 1
-                st.metric("总市值排名", f"第 {mc_rank} / {len(peers)}",
-                          f"当前: {stock_row['market_cap_yi']:.1f}亿")
+                valid_pe = peers[peers['pe'] > 0]
+                valid_pb = peers[peers['pb'] > 0]
+                valid_roe = peers[peers['roe'] > 0]
 
-            st.markdown("")
-            st.markdown("**排名说明**: P/E和P/B排名中，排名越靠前表示估值越低（越便宜）。"
-                        "ROE排名中，排名越靠前表示盈利能力越强。"
-                        "总市值排名反映公司在行业中的规模地位。")
-        else:
-            st.warning("当前个股不在同业板块成分股列表中，无法计算排名")
+                rank_cols = st.columns(4)
+                with rank_cols[0]:
+                    if stock_row['pe'] > 0 and not valid_pe.empty:
+                        pe_rank = int((valid_pe['pe'] < stock_row['pe']).sum()) + 1
+                        st.metric("P/E 排名", f"第 {pe_rank} / {len(valid_pe)}",
+                                  f"当前: {stock_row['pe']:.1f}")
+                    else:
+                        st.metric("P/E 排名", "N/A")
 
-        st.caption("⚠️ 数据来源: 东方财富行业板块。P/E趋势为基于指数价格的近似推算，仅供参考。")
+                with rank_cols[1]:
+                    if stock_row['pb'] > 0 and not valid_pb.empty:
+                        pb_rank = int((valid_pb['pb'] < stock_row['pb']).sum()) + 1
+                        st.metric("P/B 排名", f"第 {pb_rank} / {len(valid_pb)}",
+                                  f"当前: {stock_row['pb']:.2f}")
+                    else:
+                        st.metric("P/B 排名", "N/A")
+
+                with rank_cols[2]:
+                    if stock_row['roe'] > 0 and not valid_roe.empty:
+                        roe_rank = int((valid_roe['roe'] > stock_row['roe']).sum()) + 1
+                        st.metric("ROE 排名", f"第 {roe_rank} / {len(valid_roe)}",
+                                  f"当前: {stock_row['roe']:.2f}%")
+                    else:
+                        st.metric("ROE 排名", "N/A")
+
+                with rank_cols[3]:
+                    mc_rank = int((peers['market_cap_yi'] > stock_row['market_cap_yi']).sum()) + 1
+                    st.metric("总市值排名", f"第 {mc_rank} / {len(peers)}",
+                              f"当前: {stock_row['market_cap_yi']:.1f}亿")
+
+                st.markdown("")
+                st.markdown("**排名说明**: P/E和P/B排名中，排名越靠前表示估值越低（越便宜）。"
+                            "ROE排名中，排名越靠前表示盈利能力越强。"
+                            "总市值排名反映公司在行业中的规模地位。")
+            else:
+                st.warning("当前个股不在同业板块成分股列表中，无法计算排名")
+
+            st.caption("数据来源: 东方财富行业板块。P/E趋势为基于指数价格的近似推算，仅供参考。")
 
     # ==================== Tab 4: 多股对比 ====================
     with tab4:
-        st.header("📊 多股对比分析")
-        st.caption("将自选股加入列表后，横向对比关键指标")
-
+        st.header("多股对比分析")
+    
         watchlist = st.session_state.get('watchlist', [])
 
         if not watchlist:
-            st.info("👈 请先将股票加入自选股列表（在侧边栏点击「⭐ 加入自选股」）")
+            st.info("请先将股票加入自选股列表（在侧边栏点击「加入自选股」）")
         else:
             # 获取所有自选股的实时摘要
             @st.cache_data(ttl=300, show_spinner=False)
@@ -1409,7 +1481,7 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                         '总市值(亿)': '{:.1f}',
                         '流通市值(亿)': '{:.1f}',
                         '换手率(%)': '{:.2f}',
-                    }),
+                    }, na_rep="-"),
                     use_container_width=True,
                     hide_index=True,
                 )
@@ -1440,19 +1512,10 @@ if 'selected_stock' in st.session_state and st.session_state.get('data_loaded'):
                     st.plotly_chart(fig_comp, use_container_width=True)
 
 else:
-    st.info("👈 请在左侧搜索并选择一只股票，然后点击「加载数据」开始分析")
-    st.markdown("### 使用说明")
-    st.markdown(
-        "1. 在左侧搜索框输入**股票代码**（如 `000001`）或**股票名称**（如 `平安银行`）\n"
-        "2. 从下拉列表中选择目标股票\n"
-        "3. 点击 **📥 加载数据** 按钮\n"
-        "4. 系统将自动获取该股票的**季度+年度财报数据**、**历史市值**和**主营构成**\n"
-        "5. 在四个标签页中查看**财务分析**、**估值分析**、**行业对标**和**多股对比**\n"
-        "6. 使用下方**选股筛选器**按PE/PB/ROE等条件批量筛选股票"
-    )
+    st.info("请在左侧搜索并选择一只股票，然后点击「加载数据」开始分析")
 
     st.markdown("---")
-    st.header("📊 市场情绪参考 — 沪深300市盈率")
+    st.header("市场情绪参考 — 沪深300市盈率")
 
     @st.cache_data(ttl=3600, show_spinner="正在获取沪深300市盈率数据...")
     def load_csi300_pe():
@@ -1487,8 +1550,7 @@ else:
         st.warning("暂无法获取沪深300市盈率数据")
 
     st.markdown("---")
-    st.header("🔍 选股筛选器")
-    st.caption("按PE/PB/ROE/市值等条件批量筛选A股")
+    st.header("选股筛选器")
 
     col_s1, col_s2, col_s3, col_s4 = st.columns(4)
     with col_s1:
@@ -1507,7 +1569,7 @@ else:
         }
         sort_by = st.selectbox("排序方式", list(sort_options.keys()),
                                format_func=lambda x: sort_options[x])
-        run_screen = st.button("🔍 开始筛选", type="primary")
+        run_screen = st.button(" 开始筛选", type="primary")
 
     if run_screen or 'screen_result' in st.session_state:
         if run_screen:
@@ -1528,7 +1590,7 @@ else:
                     '最新价': '{:.2f}', '涨跌幅(%)': '{:.2f}',
                     'PE': '{:.1f}', 'PB': '{:.2f}', 'ROE(%)': '{:.2f}',
                     '总市值(亿)': '{:.1f}', '换手率(%)': '{:.2f}',
-                }),
+                }, na_rep="-"),
                 use_container_width=True,
                 hide_index=True,
             )

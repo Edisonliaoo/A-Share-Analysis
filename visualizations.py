@@ -1605,3 +1605,136 @@ def plot_stock_comparison_bars(stock_summaries, metric='pe', current_code=None):
         margin=dict(l=60, r=60, t=60, b=60),
     )
     return fig
+
+
+def plot_dupont_analysis(income_stmt, balance_sheet):
+    """
+    杜邦分析图: ROE分解为 净利率 × 总资产周转率 × 权益乘数
+    上半部分: 4个子图分别展示各因子趋势
+    下半部分: 驱动力贡献瀑布图(年度变化)
+    """
+    from financial_metrics import build_dupont_table, calculate_roe_decomposition_trend
+
+    dupont = build_dupont_table(income_stmt, balance_sheet)
+    if dupont.empty:
+        return None, None
+
+    labels = [str(idx.year) for idx in dupont.index]
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=('净利率(%)', '总资产周转率(次)', '权益乘数(倍)', 'ROE(%)'),
+        vertical_spacing=0.12,
+    )
+
+    colors = [C_BLUE, C_GREEN, C_ORANGE, C_DARK_RED]
+    cols_data = ['净利率(%)', '总资产周转率(次)', '权益乘数(倍)', 'ROE(%)']
+    positions = [(1, 1), (1, 2), (2, 1), (2, 2)]
+
+    for i, (col, (r, c)) in enumerate(zip(cols_data, positions)):
+        fig.add_trace(
+            go.Bar(
+                x=labels,
+                y=dupont[col].values,
+                name=col,
+                marker_color=colors[i],
+            ),
+            row=r, col=c,
+        )
+        fig.update_yaxes(title_text=col, row=r, col=c)
+
+    fig.update_layout(
+        height=500,
+        showlegend=False,
+        margin=dict(l=50, r=30, t=60, b=40),
+    )
+
+    trend = calculate_roe_decomposition_trend(income_stmt, balance_sheet, years=5)
+    waterfall_fig = None
+    if trend and 'changes' in trend:
+        changes = trend['changes']
+        latest = trend['latest']
+
+        nm = latest['净利率(%)'] / 100
+        at = latest['总资产周转率(次)']
+        em = latest['权益乘数(倍)']
+        roe_val = latest['ROE(%)'] / 100
+
+        prev_roe = roe_val - changes['ROE'] / 100
+        prev_nm = nm - changes['净利率'] / 100
+        prev_at = at - changes['总资产周转率']
+        prev_em = em - changes['权益乘数']
+
+        nm_contrib = (nm - prev_nm) * at * em
+        at_contrib = (at - prev_at) * prev_nm * em
+        em_contrib = (em - prev_em) * prev_nm * prev_at
+
+        x_labels = ['上年ROE', '净利率变化', '周转率变化', '杠杆变化', '今年ROE']
+        y_values = [prev_roe * 100, nm_contrib * 100, at_contrib * 100, em_contrib * 100, 0]
+        measure = ['absolute', 'relative', 'relative', 'relative', 'total']
+        y_values[-1] = prev_roe * 100 + nm_contrib * 100 + at_contrib * 100 + em_contrib * 100
+
+        waterfall_fig = go.Figure(go.Waterfall(
+            x=x_labels,
+            y=y_values,
+            measure=measure,
+            connector={"line": {"color": "#cbd5e1"}},
+            increasing={"marker": {"color": C_GREEN}},
+            decreasing={"marker": {"color": C_RED}},
+            totals={"marker": {"color": C_BLUE}},
+        ))
+
+        waterfall_fig.update_layout(
+            title="ROE变动驱动力分解",
+            yaxis_title="ROE(%)",
+            height=350,
+            margin=dict(l=50, r=30, t=50, b=40),
+            showlegend=False,
+        )
+
+    return fig, waterfall_fig
+
+
+def plot_dcf_sensitivity_heatmap(sensitivity_data, current_price=None):
+    """
+    DCF敏感性热力图: 增长率×折现率 -> 每股估值
+    标注当前股价参考线
+    """
+    matrix = sensitivity_data['matrix']
+    if matrix.empty:
+        return None
+
+    z = matrix.values
+    y_labels = matrix.index.tolist()
+    x_labels = matrix.columns.tolist()
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z,
+        x=x_labels,
+        y=y_labels,
+        colorscale='RdYlGn',
+        text=[[f"{v:.2f}" if not np.isnan(v) else "" for v in row] for row in z],
+        texttemplate="%{text}",
+        textfont={"size": 11},
+        hovertemplate="增长率: %{y}<br>折现率: %{x}<br>每股估值: %{z:.2f} 元<extra></extra>",
+        colorbar=dict(title="每股估值(元)"),
+    ))
+
+    if current_price and current_price > 0:
+        fig.add_annotation(
+            text=f"当前股价: {current_price:.2f} 元",
+            xref="paper", yref="paper",
+            x=0.5, y=-0.15,
+            showarrow=False,
+            font=dict(size=12, color="#6b7280"),
+        )
+
+    fig.update_layout(
+        title="DCF敏感性分析 — 每股估值(元)",
+        xaxis_title="折现率",
+        yaxis_title="增长率",
+        height=450,
+        margin=dict(l=60, r=60, t=60, b=60),
+    )
+
+    return fig

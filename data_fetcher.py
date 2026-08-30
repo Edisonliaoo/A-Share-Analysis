@@ -754,6 +754,22 @@ def _get_board_code(industry_name):
         if industry_name in name or name in industry_name:
             return code, name
 
+    parts = industry_name.split('-')
+    for i in range(len(parts) - 1, 0, -1):
+        partial = '-'.join(parts[:i])
+        if partial in _BOARD_LIST_CACHE:
+            return _BOARD_LIST_CACHE[partial], partial
+        for name, code in _BOARD_LIST_CACHE.items():
+            if partial in name or name in partial:
+                return code, name
+
+    for part in reversed(parts):
+        part = part.strip()
+        if part and len(part) >= 2:
+            for name, code in _BOARD_LIST_CACHE.items():
+                if part in name or name in part:
+                    return code, name
+
     return None, None
 
 
@@ -1101,20 +1117,17 @@ def load_local_company_info(prefix):
 
 def get_dividend_history(code):
     """
-    获取个股分红历史（来自东方财富datacenter API）
+    获取个股分红历史（来自东方财富datacenter-web API）
     返回: list of dict, 每条含 report_year, dividend_per_share, dividend_yield, payout_ratio, etc.
     """
-    secucode_map = {
-        'SH': f"{code}.SH",
-        'SZ': f"{code}.SZ",
-        'BJ': f"{code}.BJ",
-    }
     if code.startswith('6') or code.startswith('9'):
         secucode = f"{code}.SH"
     elif code.startswith('0') or code.startswith('3') or code.startswith('2'):
         secucode = f"{code}.SZ"
     else:
         secucode = f"{code}.BJ"
+
+    import re
 
     session = requests.Session()
     session.trust_env = False
@@ -1126,15 +1139,13 @@ def get_dividend_history(code):
     all_records = []
     page = 1
     while True:
-        url = 'https://datacenter.eastmoney.com/securities/api/data/v1/get'
+        url = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
         params = {
-            'reportName': 'RPT_F10_FIN_MAIN_GDHDMX',
+            'reportName': 'RPT_LICO_FN_CPD',
             'columns': 'ALL',
             'filter': f'(SECUCODE="{secucode}")',
             'pageNumber': page,
             'pageSize': 100,
-            'sortColumns': 'REPORT_DATE',
-            'sortTypes': '-1',
         }
         try:
             r = session.get(url, params=params, timeout=15)
@@ -1154,7 +1165,11 @@ def get_dividend_history(code):
 
     result = []
     for rec in all_records:
-        report_date_str = rec.get('REPORT_DATE', '')
+        assign = rec.get('ASSIGNDSCRPT') or ''
+        if not assign or '不分配' in assign:
+            continue
+
+        report_date_str = rec.get('REPORTDATE', '')
         if not report_date_str:
             continue
         try:
@@ -1162,18 +1177,27 @@ def get_dividend_history(code):
         except Exception:
             continue
 
-        eps = rec.get('EPS')
-        dps = rec.get('DVPER_SHARE')
-        payout = rec.get('PRRR')
-        div_yield = rec.get('PSR')
+        m = re.search(r'10\s*[送转]?\d*\s*派([\d.]+)元', assign)
+        if not m:
+            m = re.search(r'派([\d.]+)元', assign)
+        if not m:
+            continue
+        dps = float(m.group(1)) / 10
+
+        eps = rec.get('BASIC_EPS')
+        div_yield = rec.get('ZXGXL')
+        payout = None
+        if eps and dps:
+            payout = dps / eps * 100 if eps > 0 else None
 
         result.append({
             'report_date': report_date,
             'report_year': str(report_date.year),
-            'dividend_per_share': float(dps) if dps is not None else None,
+            'dividend_per_share': dps,
             'eps': float(eps) if eps is not None else None,
-            'payout_ratio': float(payout) if payout is not None else None,
+            'payout_ratio': payout,
             'dividend_yield': float(div_yield) if div_yield is not None else None,
+            'assign_desc': assign,
         })
 
     result.sort(key=lambda x: x['report_date'])

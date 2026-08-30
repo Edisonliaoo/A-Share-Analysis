@@ -167,6 +167,7 @@ def dcf_valuation(cash_flow, income_stmt, balance_sheet,
         'projected_fcfs': projected_fcfs,
         'terminal_value': terminal_value,
         'discounted_terminal': discounted_terminal,
+        'shares': actual_shares,
         'params': {
             'growth_rate': growth_rate,
             'terminal_growth': terminal_growth,
@@ -346,3 +347,46 @@ def pe_valuation(income_stmt, current_price=None, market_cap=None):
         result['pe_ratio'] = market_cap / latest_profit
 
     return result
+
+
+def dcf_sensitivity(cash_flow, income_stmt, balance_sheet,
+                     growth_rates=None, discount_rates=None,
+                     terminal_growth=0.03, forecast_years=5,
+                     shares=None):
+    """
+    DCF敏感性分析: 不同增长率×折现率组合下的每股估值
+    返回: dict with 'matrix' (pd.DataFrame), 'growth_rates', 'discount_rates'
+    """
+    if growth_rates is None:
+        growth_rates = [0.03, 0.05, 0.08, 0.10, 0.12, 0.15, 0.20]
+    if discount_rates is None:
+        discount_rates = [0.06, 0.08, 0.10, 0.12, 0.15, 0.18]
+
+    matrix = pd.DataFrame(index=[f"{g*100:.0f}%" for g in growth_rates],
+                         columns=[f"{d*100:.0f}%" for d in discount_rates],
+                         dtype=float)
+
+    for g in growth_rates:
+        for d in discount_rates:
+            if d <= terminal_growth:
+                matrix.loc[f"{g*100:.0f}%", f"{d*100:.0f}%"] = np.nan
+                continue
+            result = dcf_valuation(
+                cash_flow, income_stmt, balance_sheet,
+                growth_rate=g, terminal_growth=terminal_growth,
+                discount_rate=d, forecast_years=forecast_years,
+                shares=shares,
+            )
+            if result and result.get('per_share_value') is not None:
+                matrix.loc[f"{g*100:.0f}%", f"{d*100:.0f}%"] = result['per_share_value']
+            else:
+                matrix.loc[f"{g*100:.0f}%", f"{d*100:.0f}%"] = np.nan
+
+    matrix.index.name = '增长率'
+    matrix.columns.name = '折现率'
+
+    return {
+        'matrix': matrix,
+        'growth_rates': growth_rates,
+        'discount_rates': discount_rates,
+    }
